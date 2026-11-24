@@ -68,15 +68,17 @@
   /* ---------- Пакет и опции: как в боте (src/plans.js). Бот передаёт пакет и опции заведения,
    * владелец в демо может переключать их на экране «Опции» (хранится только на этом телефоне). ---------- */
   const X = window.Extras;
-  const planKey = () => { const d = store.get().demo; return Object.hasOwn(X.PLANS, d.plan || '') ? d.plan : params.plan; };
+  // Мини-приложение продаётся вместе с «Администратором 24/7»: в нём всегда полный набор, большие опции по заказу заведения.
+  const planKey = () => 'admin';
+  /* Владелец включает и выключает функции в «Настройках»: переключатель важнее набора по умолчанию. */
+  const NEW_FEATURES = ['firstvisit', 'gift'];
   function has(key) {
-    const d = store.get().demo;
-    if (d.off && d.off[key]) return false;
-    if (X.PLANS[planKey()].features.includes(key)) return true;
-    if (params.options.includes(key)) return true;
-    return Boolean(d.on && d.on[key]);
+    const o = store.get().features;
+    if (Object.hasOwn(o, key)) return Boolean(o[key]);
+    return X.PLANS.admin.features.includes(key) || params.options.includes(key);
   }
-  const included = (key) => X.PLANS[planKey()].features.includes(key) || params.options.includes(key);
+  /** Число из настроек функции (скидка, процент) или значение по умолчанию. */
+  const F = (key, def) => { const v = store.get().fset[key]; return Number.isFinite(v) ? v : def; };
   const basePrices = Object.fromEntries(venue.services.map((s) => [s.id, s.p]));
   function applyPrices() { const pr = store.get().prices; venue.services.forEach((s) => { s.p = Number.isFinite(pr[s.id]) ? pr[s.id] : basePrices[s.id]; }); }
   applyPrices();
@@ -87,7 +89,8 @@
     const sum = ids.reduce((a, id) => a + (svcById(id) ? svcById(id).p : 0), 0);
     const rule = X.prepay(venue.sphere);
     if (sum < rule.min) return 0;
-    return rule.amount || Math.max(500, Math.round((sum * rule.percent) / 100 / 100) * 100);
+    const pct = F('prepay', rule.percent || 20);
+    return Number.isFinite(store.get().fset.prepay) || !rule.amount ? Math.max(500, Math.round((sum * pct) / 100 / 100) * 100) : rule.amount;
   }
 
   store.update((s) => {
@@ -288,6 +291,7 @@
   const past = () => store.get().bookings.filter((b) => !upcoming().includes(b)).sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
   const nowMin = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); };
   const pendingRequests = () => owner.requests.filter((r) => !store.get().decided[r.id]).length + store.get().bookings.filter((b) => ['pending', 'request'].includes(b.status)).length;
+  const isNewClient = () => !store.get().bookings.some((b) => b.id !== 'past1' && ['pending', 'confirmed', 'done', 'request'].includes(b.status));
   const whenText = (b) => (b.time ? `${L.dayTitle(b.date)}, ${b.time}` : `удобно: ${(b.days || [b.date]).map((d) => L.dayTitle(d).split(',')[0]).join(', ')}${b.parts && b.parts.length ? `, ${b.parts.join(', ').toLowerCase()}` : ''}`);
   const Who = who[0].toUpperCase() + who.slice(1);
   const telHref = () => { const d = String(venue.phone).replace(/[^\d+]/g, ''); return d.length >= 6 ? `tel:${d}` : ''; };
@@ -428,6 +432,7 @@
       lead = html`
         <p class="hero__lead">Ближайшее свободное окно, <b>${L.dayTitle(first.date)}, ${L.dayLong(first.date)}</b></p>
         <div class="hero__time">${timeHero(first.time)}</div>
+        ${has('firstvisit') && isNewClient() ? html`<div class="hero__chips"><span class="chip chip--hot">−${F('firstvisit', 10)}% на первый визит</span></div>` : ''}
         <div class="hero__actions" style="margin-top:16px">
           <button class="btn btn--light btn--grow" type="button" data-act="take" data-date="${first.date}" data-time="${first.time}" data-master="${first.masterId}">Занять это время<span class="btn__go">${I.arrow}</span></button>
         </div>`;
@@ -479,7 +484,6 @@
               <div class="row__main"><div class="row__title">${s.t}</div><div class="row__sub">${L.duration(s.d)}${s.about ? ` · ${s.about}` : ''}</div></div>
               <div class="row__end"><span class="row__price">${L.priceText(s)}</span><span class="add">${I.plus}</span></div>
             </button>`)}</div>
-          ${venue.ratingSample ? html`<p class="demo-note" style="margin-top:10px">Цены примерные: в вашем приложении будут ваши</p>` : ''}
         </section>
 
         <section class="section rise" style="--i:4">
@@ -494,6 +498,13 @@
         </section>
 
         ${has('portfolio') ? worksSection() : ''}
+        ${has('gift') ? html`
+        <section class="section rise" style="--i:4">
+          <button class="card gift" type="button" data-act="gift">
+            <span class="gift__icon">${I.sparkle}</span>
+            <span class="row__main"><span class="row__title">Подарочный сертификат</span><span class="row__sub">На любую сумму или услугу, придёт красивой открыткой в Telegram</span></span>${I.chev}
+          </button>
+        </section>` : ''}
 
         <section class="section rise" style="--i:5">
           <div class="section__head"><h2 class="display h3">Отзывы</h2>${venue.ratingSample ? html`<span class="tag tag--card">пример</span>` : ''}</div>
@@ -519,8 +530,7 @@
           </div>
         </section>
 
-        ${promo()}
-        <p class="demo-note">Демо: окна и отзывы примерные, записи хранятся только на этом телефоне</p>`,
+        ${promo()}`,
     };
   };
 
@@ -549,9 +559,11 @@
     openSheet(html`
       <div class="master-head"><span class="avatar avatar--lg">${L.initials(m.name)}</span><div><h2 class="display h2">${m.name}</h2><div class="muted">${m.role} · ★ ${fmtRating(m.rating)} · ${m.since} ${L.plural(m.since, 'год', 'года', 'лет')} опыта</div></div></div>
       <div class="works-grid">${works.map((w) => workCard(w.t, w.m, w.i))}</div>
-      <p class="demo-note">В вашем боте здесь будут настоящие фото работ: мастер добавляет их сам, прямо из Telegram</p>
       <button class="btn btn--accent btn--wide" style="margin-top:14px" type="button" data-sheet="book-master" data-id="${m.id}">Записаться к ${m.name}<span class="btn__go">${I.arrow}</span></button>`);
   }
+
+  ACTS.gift = () => openSheet(html`<div class="page-title" style="text-align:center">${heading('Подарочный', 'сертификат', 'h2')}<p>Выберите сумму: сертификат придёт открыткой, его можно переслать в Telegram.</p></div>
+    <div class="choices choices--center">${[3000, 5000, 10000].map((v) => html`<button type="button" class="choice choice--lg" data-sheet="gift-buy" data-v="${v}">${L.money(v)}</button>`)}</div>`);
 
   /* Частые вопросы (faq). */
   function faqSection() {
@@ -618,8 +630,7 @@
             <div class="row__main"><div class="row__title">${s.t}</div><div class="row__sub">${L.duration(s.d)}${s.about ? ` · ${s.about}` : ''}</div></div>
             <span class="row__price">${L.priceText(s)}</span>
           </button>`)}</div>
-        ${draft.fixed && sel.length && !keep ? html`<p class="demo-note">На ${draft.time} это не помещается, подберём другое время</p>` : ''}
-        <p class="demo-note">Не знаете, что выбрать? <button type="button" class="section__link" data-act="ask">Спросите ${who}а</button>, можно прислать фото</p>`,
+        ${draft.fixed && sel.length && !keep ? html`<p class="demo-note">На ${draft.time} это не помещается, подберём другое время</p>` : ''}`,
       main: sel.length
         ? { text: keep ? `Проверить запись · ${total}` : has('selfbook') ? `Выбрать время · ${total}` : `Выбрать удобные дни · ${total}`, onClick: () => { haptic.impact('light'); if (keep) go('confirm'); else nextAfterServices(); }, color: colors.accent, textColor: colors.accentInk }
         : { text: 'Выберите услугу', disabled: true, onClick: () => {}, color: colors.accent, textColor: colors.accentInk },
@@ -760,7 +771,7 @@
     const end = isReq ? '' : L.toTime(L.toMin(draft.time) + dur);
     const prepay = moving ? 0 : prepayFor(draft.services);
     draft.brief = draft.brief || {};
-    const brief = !moving && needBrief(draft.services) ? briefQs() : [];
+    const photoQ = !moving && needBrief(draft.services) ? briefQs().find((q) => q.type === 'photo') : null;
     return {
       html: html`
         ${moving ? '' : stepBar(4)}
@@ -777,18 +788,11 @@
             <div class="kv"><dt>${who[0].toUpperCase() + who.slice(1)}</dt><dd>${m.name}</dd></div>
             <div class="kv"><dt>Где</dt><dd>${venue.name}</dd></div>
             <div class="kv kv--total"><dt>Итого</dt><dd>${totalText(draft.services)}</dd></div>
+            ${has('firstvisit') && isNewClient() && sumOf(draft.services) ? html`<div class="kv"><dt>Скидка на первый визит</dt><dd>−${F('firstvisit', 10)}%, ${L.money(Math.round(sumOf(draft.services) * (100 - F('firstvisit', 10)) / 100))}</dd></div>` : ''}
             ${prepay ? html`<div class="kv"><dt>Предоплата, чтобы закрепить время</dt><dd>${L.money(prepay)}</dd></div>` : ''}
           </dl>
         </article>
-        ${brief.length ? html`
-        <section class="section" style="margin-top:18px">
-          <div class="section__head"><h2 class="display h3">Расскажите <em>подробнее</em></h2></div>
-          <div class="list rise" style="--i:2">${brief.map((q, qi) => q.type === 'choice' ? html`
-            <div class="field"><span>${q.title}</span><div class="choices">${q.options.map((o) => html`<button type="button" class="choice ${draft.brief[qi] === o ? 'is-on' : ''}" data-act="brief-pick" data-q="${qi}" data-v="${o}">${o}</button>`)}</div></div>` : q.type === 'text' ? html`
-            <label class="field"><span>${q.title}</span><textarea data-in="brief" data-q="${qi}" rows="2" maxlength="300" placeholder="${q.hint || ''}">${draft.brief[qi] || ''}</textarea></label>` : html`
-            <div class="field"><span>${q.title}</span><label class="photo-pick">${I.plus}<span>${draft.photos ? `Добавлено фото: ${draft.photos}` : 'Прикрепить фото'}</span><input type="file" accept="image/*" multiple data-in="photos" hidden></label></div>`)}
-          </div>
-        </section>` : ''}
+
         ${moving ? '' : html`
         <section class="section" style="margin-top:18px">
           <div class="list rise" style="--i:2">
@@ -796,7 +800,7 @@
             <label class="field" data-f="phone"><span>Телефон</span><input data-in="phone" type="tel" inputmode="tel" autocomplete="tel" maxlength="20" value="${phone}" placeholder="+7 900 000-00-00"></label>
             ${window.TG.version('6.9') && !phone ? html`<div class="field"><button class="btn btn--soft btn--sm" type="button" data-act="tg-phone">${I.phone}Взять номер из Telegram</button></div>` : ''}
             <label class="field"><span>Пожелания, если есть</span><textarea data-in="comment" rows="2" maxlength="300" placeholder="Например: хочу как в прошлый раз">${draft.comment || ''}</textarea></label>
-            ${has('birthday') ? html`<label class="field"><span>День рождения, если хотите подарок</span><input data-in="birthday" type="date" value="${draft.birthday || ''}"></label>` : ''}
+            ${photoQ ? html`<div class="field"><span>${photoQ.title}</span><label class="photo-pick">${I.plus}<span>${draft.photos ? `Добавлено фото: ${draft.photos}` : 'Прикрепить фото'}</span><input type="file" accept="image/*" multiple data-in="photos" hidden></label></div>` : ''}
             ${has('sources') ? html`<div class="field"><span>Откуда вы о нас узнали?</span><div class="choices">${X.SOURCES.map((o) => html`<button type="button" class="choice ${draft.source === o ? 'is-on' : ''}" data-act="source" data-v="${o}">${o}</button>`)}</div></div>` : ''}
           </div>
         </section>`}
@@ -854,10 +858,10 @@
           id = `b${Date.now().toString(36)}`;
           s.contact = { name, phone };
           const qs = needBrief(draft.services) ? briefQs() : [];
-          const briefLines = qs.map((q, qi) => (q.type === 'photo' ? (draft.photos ? `${q.title}: ${draft.photos} фото` : '') : draft.brief && draft.brief[qi] ? `${q.title}: ${draft.brief[qi]}` : '')).filter(Boolean);
+          const briefLines = qs.filter((q) => q.type === 'photo' && draft.photos).map((q) => `${q.title}: ${draft.photos} фото`);
           const prepay = prepayFor(draft.services);
           s.bookings.push({ id, services: [...draft.services], titles: draft.services.map((x) => svcById(x).t), masterId: draft.assigned, date: draft.date, time: draft.time, dur, total: sumOf(draft.services), status: isReq ? 'request' : 'pending', name, phone, comment: String(draft.comment || '').slice(0, 300), created: Date.now(),
-            days: isReq ? [...draft.req.days].sort() : null, parts: isReq ? [...draft.req.parts] : null, brief: briefLines, birthday: draft.birthday || '', source: draft.source || '', prepay, prepayStatus: prepay ? 'wait' : '' });
+            days: isReq ? [...draft.req.days].sort() : null, parts: isReq ? [...draft.req.parts] : null, brief: briefLines, birthday: '', source: draft.source || '', prepay, prepayStatus: prepay ? 'wait' : '' });
         }
       });
       haptic.ok();
@@ -995,7 +999,7 @@
           <aside class="promo promo--sm rise" style="margin:0 0 16px">
             ${art(look.pattern, 21)}
             <p class="eyebrow">Приведите друга</p>
-            <h3 class="display h3">Вам и другу <em>−10%</em></h3>
+            <h3 class="display h3">Вам и другу <em>−${F('referral', 10)}%</em></h3>
             <p>Отправьте личную ссылку: когда друг запишется по ней, скидка придёт вам обоим.</p>
             <button class="btn btn--light btn--sm" type="button" data-act="share">Поделиться ссылкой</button>
           </aside>` : ''}
@@ -1017,7 +1021,7 @@
   ACTS.bseg = (d) => { haptic.tap(); view.bookings = d.v; refresh(); };
   ACTS['wl-off'] = (d) => { store.update((s) => { s.waitlist = s.waitlist.filter((w) => w.id !== d.id); }); haptic.tap(); refresh(); };
   ACTS.share = () => {
-    const text = `Записываюсь в «${venue.name}» прямо в Telegram, очень удобно. По моей ссылке у тебя скидка 10%`;
+    const text = `Записываюсь в «${venue.name}» прямо в Telegram, очень удобно. По моей ссылке у тебя скидка ${F('referral', 10)}%`;
     window.TG.openLink(`https://t.me/share/url?url=${encodeURIComponent(location.origin + location.pathname)}&text=${encodeURIComponent(text)}`);
   };
   /* «Пора снова» (return): через нужный срок бот сам зовёт. */
@@ -1069,7 +1073,7 @@
       <div class="page-title" style="text-align:center">${heading('Как', 'всё прошло?', 'h2')}<p>${b.titles.join(', ')}, ${L.dayTitle(b.date)}</p></div>
       <div class="rate" role="radiogroup" aria-label="Оценка">${[1, 2, 3, 4, 5].map((n) => html`<button type="button" class="${n <= s ? 'is-on' : ''}" data-sheet="star" data-n="${n}" aria-label="${n}">${I.star}</button>`)}</div>
       ${s >= 4 ? html`<div class="card card--pad" style="text-align:center"><b>Спасибо!</b><p class="muted small" style="margin:6px 0 14px">Поделитесь впечатлением на картах, это очень помогает. В вашем приложении здесь будет ссылка на ваши отзывы.</p><button class="btn btn--accent btn--wide" type="button" data-sheet="save">Оставить отзыв на картах</button></div>` : ''}
-      ${s && s <= 3 ? html`<div class="list"><label class="field"><span>Что можно улучшить?</span><textarea data-sheet-in="text" rows="3" maxlength="500" placeholder="Это увидит только владелец"></textarea></label></div><button class="btn btn--accent btn--wide" style="margin-top:12px" type="button" data-sheet="save">Отправить владельцу</button><p class="demo-note">Плохие оценки не попадают на карты: владелец узнаёт о проблеме лично и успевает всё исправить</p>` : ''}
+      ${s && s <= 3 ? html`<div class="list"><label class="field"><span>Что можно улучшить?</span><textarea data-sheet-in="text" rows="3" maxlength="500" placeholder="Это увидит только владелец"></textarea></label></div><button class="btn btn--accent btn--wide" style="margin-top:12px" type="button" data-sheet="save">Отправить владельцу</button>` : ''}
     `);
   }
 
@@ -1118,6 +1122,7 @@
       haptic.impact('medium'); toast(store.get().black[el.dataset.id] ? 'В чёрном списке: записаться сможет только с предоплатой' : 'Убрали из чёрного списка'); closeSheet(); refresh();
     }
     if (act === 'bc-send') { haptic.ok(); toast(`Рассылка ушла ${owner.clients.length} клиентам`); closeSheet(); }
+    if (act === 'gift-buy') { haptic.ok(); toast(`Сертификат на ${L.money(Number(el.dataset.v))}: в вашем боте здесь оплата и открытка`); closeSheet(); }
     if (act === 'tip') { haptic.ok(); toast(`Спасибо! ${L.money(Number(el.dataset.v))} ушли мастеру`); closeSheet(); }
     if (act === 'star') { haptic.tap(); reviewDraft.stars = Number(el.dataset.n); drawReview(); }
     if (act === 'save') {
@@ -1138,14 +1143,14 @@
     const freeWeek = Array.from({ length: 7 }, (_, i) => slots.free(L.addDays(L.today(), i), null, 60).size).reduce((a, x) => a + x, 0);
     const pend = pendingRequests();
     const tabs = [['req', `Заявки${pend ? ` · ${pend}` : ''}`], ['day', 'Расписание'], has('clientbase') ? ['clients', 'Клиенты'] : null,
-      ['money', has('accounting') ? 'Выручка' : 'Отчёт'], has('settings') || has('closeday') ? ['settings', 'Настройки'] : null, ['options', 'Опции']].filter(Boolean);
+      ['money', has('accounting') ? 'Выручка' : 'Отчёт'], has('settings') || has('closeday') ? ['settings', 'Настройки'] : null].filter(Boolean);
     if (!tabs.some(([k]) => k === view.owner)) view.owner = 'req';
-    const body = { req: ownerRequests, day: ownerSchedule, clients: ownerClients, money: ownerMoney, settings: ownerSettings, options: ownerOptions }[view.owner]();
+    const body = { req: ownerRequests, day: ownerSchedule, clients: ownerClients, money: ownerMoney, settings: ownerSettings }[view.owner]();
     return {
       html: html`
         <header class="owner-head">
           ${art(look.pattern, 3)}
-          <p class="eyebrow">Так это видит владелец <span class="tag">пример</span> <span class="tag">${X.PLANS[planKey()].title}</span></p>
+          <p class="eyebrow">Так это видит владелец <span class="tag">пример</span></p>
           <h1 class="display h1">${venue.name.length > 22 ? 'Ваша студия' : venue.name} <em>сегодня</em></h1>
           <p>${L.WD_FULL[new Date().getDay()]}, ${L.dayLong(L.today())}</p>
           <div class="stats">
@@ -1181,7 +1186,7 @@
         <div class="req__when">${r.when || `${L.dayTitle(r.date)}, ${r.time}`}</div>
         <div class="row__sub" style="font-size:14px">${r.service} · ${r.master} · ${r.price ? L.money(r.price) : 'бесплатно'}</div>
         ${r.comment ? html`<p class="req__comment">«${r.comment}»</p>` : ''}
-        ${r.brief && r.brief.length ? html`<div class="req__comment"><b>Бриф</b>${r.brief.map((l) => html`<div>${l}</div>`)}</div>` : ''}
+        ${r.brief && r.brief.length ? html`<div class="req__comment">${r.brief.map((l) => html`<div>${l}</div>`)}</div>` : ''}
         ${r.source || r.birthday ? html`<div class="chips-row">${r.source ? html`<span class="chip">Откуда: ${r.source}</span>` : ''}${r.birthday ? html`<span class="chip">ДР ${r.birthday.slice(8)}.${r.birthday.slice(5, 7)}</span>` : ''}</div>` : ''}
         ${r.prepay ? html`<div class="booking__foot" style="margin-top:10px"><span>Предоплата ${L.money(r.prepay)}: ${r.prepayStatus === 'paid' ? 'получена' : r.prepayStatus === 'sent' ? 'клиент оплатил' : 'ждём'}</span>${r.prepayStatus === 'sent' ? html`<button class="btn btn--soft btn--sm" type="button" data-act="prepay-ok" data-id="${r.id}">Деньги пришли</button>` : ''}</div>` : ''}
         <div class="req__btns">
@@ -1189,15 +1194,13 @@
           <button class="btn btn--line btn--sm" type="button" data-act="decide" data-id="${r.id}" data-v="no" data-own="${r.own ? 1 : 0}">Отклонить</button>
         </div>
       </article>`)}
-      <p class="demo-note">Нажмите «Подтвердить»: клиент сразу получит сообщение от бота</p>
       ${has('waitlist') ? waitlistOwner() : ''}`;
   }
   function waitlistOwner() {
     const sample = [{ name: 'Ирина К.', when: 'завтра', what: venue.services[0].t }, { name: 'Олег М.', when: 'в субботу', what: (venue.services[1] || venue.services[0]).t }];
     const own = store.get().waitlist.map((w) => ({ name: `${(store.get().contact || {}).name || 'Вы'} (это вы)`, when: L.dayTitle(w.date), what: w.titles.join(', ') }));
     return html`<section class="section"><div class="section__head"><h2 class="display h3">Лист <em>ожидания</em></h2></div>
-      <div class="list">${[...own, ...sample].map((w) => html`<div class="row"><span class="avatar">${L.initials(w.name)}</span><div class="row__main"><div class="row__title">${w.name}</div><div class="row__sub">${w.what} · ${w.when}</div></div></div>`)}</div>
-      <p class="demo-note">Когда кто-то отменит запись, бот сам предложит освободившееся время первому в очереди</p></section>`;
+      <div class="list">${[...own, ...sample].map((w) => html`<div class="row"><span class="avatar">${L.initials(w.name)}</span><div class="row__main"><div class="row__title">${w.name}</div><div class="row__sub">${w.what} · ${w.when}</div></div></div>`)}</div></section>`;
   }
   ACTS['prepay-ok'] = (d) => { store.update((s) => { const b = s.bookings.find((x) => x.id === d.id); if (b) b.prepayStatus = 'paid'; }); haptic.ok(); toast('Отметили оплату. Клиенту пришло подтверждение'); refresh(); };
   ACTS.decide = (d, el) => {
@@ -1234,8 +1237,7 @@
           <div class="week__day"><b>${w.date === L.today() ? 'Сегодня' : L.WD[d.getDay()][0].toUpperCase() + L.WD[d.getDay()].slice(1)}, ${d.getDate()}</b><span>${w.count} ${L.plural(w.count, 'запись', 'записи', 'записей')}</span></div>
           <div class="load"><div class="load__bar"><i style="--p:${Math.round(w.load * 100)}%"></i></div><span class="num">${Math.round(w.load * 100)}%</span></div>
           ${I.chev}
-        </button>`; })}</div>
-        <p class="demo-note">В 20:00 бот сам присылает владельцу расписание на завтра</p>`;
+        </button>`; })}</div>`;
     }
     const days = Array.from({ length: 7 }, (_, i) => L.addDays(L.today(), i));
     const all = owner.daySchedule(view.schedDay);
@@ -1289,8 +1291,7 @@
         <div class="field"><span>Услуга</span><div class="choices">${venue.services.map((x) => html`<button type="button" class="choice ${x.id === md.sid ? 'is-on' : ''}" data-sheet="m-svc" data-v="${x.id}">${x.t}</button>`)}</div></div>
         <div class="field"><span>Время</span><div class="choices">${free.length ? free.map((m) => html`<button type="button" class="choice ${md.time === L.toTime(m) ? 'is-on' : ''}" data-sheet="m-time" data-v="${L.toTime(m)}">${L.toTime(m)}</button>`) : html`<span class="muted small">В этот день свободного времени нет</span>`}</div></div>
       </div>
-      <button class="btn btn--accent btn--wide" style="margin-top:14px" type="button" data-sheet="m-save">Записать</button>
-      <p class="demo-note">Бот даст ссылку для клиента: по ней он получит напоминания</p>`);
+      <button class="btn btn--accent btn--wide" style="margin-top:14px" type="button" data-sheet="m-save">Записать</button>`);
   }
   ACTS.sseg = (d) => { haptic.tap(); view.sched = d.v; refresh(); };
   ACTS.sday = (d) => { haptic.tap(); view.schedDay = d.date; view.sched = 'day'; refresh(); };
@@ -1314,7 +1315,7 @@
         ${has('birthday') ? html`<button type="button" class="${view.clients === 'bday' ? 'is-on' : ''}" data-act="cseg" data-v="bday">День рождения скоро · ${groups.bday.length}</button>` : ''}
         ${has('blacklist') ? html`<button type="button" class="${view.clients === 'black' ? 'is-on' : ''}" data-act="cseg" data-v="black">Чёрный список · ${groups.black.length}</button>` : ''}
       </div>
-      ${view.clients === 'bday' ? html`<div class="card note" style="margin-bottom:12px">${I.sparkle}<div><b>Поздравим сами</b><span class="muted">В день рождения бот пришлёт поздравление и подарок: скидку 15% на неделю.</span></div></div>` : ''}
+      ${view.clients === 'bday' ? html`<div class="card note" style="margin-bottom:12px">${I.sparkle}<div><b>Поздравим сами</b><span class="muted">В день рождения бот пришлёт поздравление и подарок: скидку ${F('bday', 15)}% на неделю.</span></div></div>` : ''}
       ${view.clients === 'black' ? html`<div class="card note" style="margin-bottom:12px">${I.shield}<div><b>Кто не приходит</b><span class="muted">Записаться они смогут только с предоплатой, а вы увидите пометку в заявке.</span></div></div>` : ''}
       ${view.clients === 'idle' && has('winback') ? html`<div class="card note" style="margin-bottom:12px">${I.sparkle}<div><b>Верните их одной кнопкой</b><span class="muted">Бот напишет: «Давно не виделись», и покажет свободные окна. Без рассылок вручную.</span></div></div>` : ''}
       ${list.length ? html`<div class="list" id="clients">${list.map((c) => html`
@@ -1393,8 +1394,7 @@
       ${has('sources') ? html`<div class="section rise" style="margin-top:18px"><div class="section__head"><h2 class="display h3">Откуда <em>клиенты</em></h2></div>
         <div class="card share">${X.SOURCES.slice(0, 5).map((src, i) => { const sh = [0.34, 0.22, 0.18, 0.15, 0.11][i]; return html`<div class="share__row"><span>${src}</span><b>${Math.round(visits * sh)} ${L.plural(Math.round(visits * sh), 'визит', 'визита', 'визитов')}</b><div class="share__bar"><i style="--p:${Math.round(sh * 100 / 0.34)}%"></i></div></div>`; })}</div></div>` : ''}
       ${has('team') && venue.masters.length ? html`<div class="section rise" style="margin-top:18px"><div class="section__head"><h2 class="display h3">Зарплата <em>${who}ам</em></h2><span class="tag tag--card">40%</span></div>
-        <div class="card share">${owner.byMaster.map((x) => html`<div class="share__row"><span>${x.name} · ★ ${fmtRating((master(venue.masters.find((m) => m.name === x.name).id) || {}).rating || 5)}</span><b>${L.money(Math.round(total * x.share * 0.4 / 100) * 100)}</b><div class="share__bar"><i style="--p:${Math.round(x.share * 100)}%"></i></div></div>`)}</div>
-        <p class="demo-note">Чаевые приходят мастерам напрямую по их ссылкам</p></div>` : ''}
+        <div class="card share">${owner.byMaster.map((x) => html`<div class="share__row"><span>${x.name} · ★ ${fmtRating((master(venue.masters.find((m) => m.name === x.name).id) || {}).rating || 5)}</span><b>${L.money(Math.round(total * x.share * 0.4 / 100) * 100)}</b><div class="share__bar"><i style="--p:${Math.round(x.share * 100)}%"></i></div></div>`)}</div></div>` : ''}
       ${has('expenses') ? expensesBlock(total) : ''}
       <button class="btn btn--plain btn--wide" style="margin-top:18px" type="button" data-act="excel">${I.cal}Выгрузить в Excel</button>
       ${has('monthly') ? html`<button class="section__link" style="display:block;margin:14px auto 0" type="button" data-act="monthly">Как выглядит отчёт за месяц</button>` : ''}`;
@@ -1412,8 +1412,7 @@
   function monthlyReport() {
     const month = owner.perWeek.reduce((a, x) => a + x.sum, 0); const visits = owner.perWeek.reduce((a, x) => a + x.visits, 0);
     return html`<div class="section__head"><h2 class="display h3">Отчёт <em>за месяц</em></h2></div>
-      <div class="bubble-wrap"><div class="bubble"><div class="bubble__from">Бот записи</div><b>Итоги месяца</b><br>Заявок: ${Math.round(visits * 1.15)}, из них ночью ${Math.round(visits * 0.18)}<br>Визитов: ${visits}<br>Выручка: ${L.money(month)}<br>Неявок: ${owner.noshowNow}%<div class="bubble__time">1-е число, 10:00</div></div></div>
-      <p class="demo-note">В пакете «Администратор 24/7» здесь подробный учёт: выручка по дням, мастерам, услугам и Excel</p>`;
+      <div class="bubble-wrap"><div class="bubble"><div class="bubble__from">Бот записи</div><b>Итоги месяца</b><br>Заявок: ${Math.round(visits * 1.15)}, из них ночью ${Math.round(visits * 0.18)}<br>Визитов: ${visits}<br>Выручка: ${L.money(month)}<br>Неявок: ${owner.noshowNow}%<div class="bubble__time">1-е число, 10:00</div></div></div>`;
   }
   ACTS.monthly = () => openSheet(html`<div class="page-title">${heading('Отчёт', 'за месяц', 'h2')}<p>Приходит владельцу 1-го числа.</p></div>${monthlyReport()}<button class="btn btn--plain btn--wide" style="margin-top:18px" type="button" data-sheet="close">Понятно</button>`);
   ACTS.excel = () => {
@@ -1429,6 +1428,54 @@
 
   /* ================= Настройки: цены, часы, закрытые дни ================= */
 
+  /* Функции, которые владелец включает и выключает сам. param: настройка числом (скидка, процент). */
+  const SWITCHES = [
+    ['Клиентам', [
+      ['selfbook', 'Самозапись в свободные окна', 'Выключено: клиент оставляет заявку с удобными днями, вы назначаете время'],
+      ['reminders', 'Напоминания накануне и за 2 часа'],
+      ['reschedule', 'Клиент сам переносит запись'],
+      ['prepay', 'Предоплата за дорогие услуги', '', ['prepay', '% от суммы', 20, 5, 100]],
+      ['firstvisit', 'Скидка на первый визит', 'Новые клиенты видят её на главной и в записи', ['firstvisit', '%', 10, 1, 50]],
+      ['referral', '«Приведи друга»', 'Скидка клиенту и другу по личной ссылке', ['referral', '%', 10, 1, 50]],
+      ['waitlist', 'Лист ожидания на занятые дни'],
+      ['gift', 'Подарочные сертификаты'],
+      ['reviews', 'Оценка после визита и отзывы на картах'],
+      ['return', '«Пора снова» через нужный срок'],
+      ['portfolio', 'Работы мастеров'],
+      ['faq', 'Частые вопросы'],
+      ['brief', 'Фото референса при записи'],
+      ['sources', 'Вопрос «Откуда вы о нас узнали?»'],
+      ['team', 'Чаевые и зарплата мастерам'],
+    ]],
+    ['Вам', [
+      ['evening', 'Расписание на завтра в 20:00'],
+      ['winback', 'Возврат давно не бывших'],
+      ['birthday', 'Поздравление с днём рождения', 'Подарок: скидка на неделю', ['bday', '%', 15, 1, 50]],
+      ['blacklist', 'Чёрный список'],
+      ['broadcast', 'Рассылка всем клиентам'],
+      ['expenses', 'Расходы и прибыль'],
+    ]],
+  ];
+  function switchesBlock() {
+    return SWITCHES.map(([group, list]) => html`
+      <section class="section rise"><div class="section__head"><h2 class="display h3">Функции <em>${group.toLowerCase()}</em></h2></div>
+        <div class="list">${list.map(([k, title, about, param]) => { const on = has(k); return html`
+          <div class="row opt">
+            <div class="row__main"><div class="row__title">${title}</div>${about ? html`<div class="row__sub">${about}</div>` : ''}
+              ${param && on ? html`<label class="opt__param"><input class="price-in" data-in="fset" data-id="${param[0]}" type="number" inputmode="numeric" min="${param[3]}" max="${param[4]}" value="${F(param[0], param[2])}"><span class="muted">${param[1]}</span></label>` : ''}</div>
+            <input class="switch" type="checkbox" aria-label="${title}" data-in="feat" data-id="${k}" ${on ? 'checked' : ''}>
+          </div>`; })}</div></section>`);
+  }
+  INPUTS.feat = (el) => {
+    store.update((s) => { s.features[el.dataset.id] = el.checked; });
+    haptic.tap(); toast(el.checked ? 'Включено: клиенты уже видят' : 'Выключено'); refresh();
+  };
+  INPUTS.fset = (el) => {
+    const v = Math.round(Number(el.value));
+    if (!Number.isFinite(v) || v < Number(el.min) || v > Number(el.max)) return;
+    store.update((s) => { s.fset[el.dataset.id] = v; });
+  };
+
   function ownerSettings() {
     const st = store.get();
     const days = Array.from({ length: 14 }, (_, i) => L.addDays(L.today(), i));
@@ -1439,8 +1486,8 @@
         <div class="list"><div class="row"><div class="row__main"><div class="row__title">Ежедневно 10:00–21:00</div><div class="row__sub">Перерыв и часы мастеров меняются кнопками в боте</div></div></div></div></section>` : ''}
       ${has('closeday') ? html`<section class="section rise"><div class="section__head"><h2 class="display h3">Закрыть <em>дни</em></h2><span class="small muted">отпуск, санитарный день</span></div>
         <div class="days">${days.map((date) => { const d = L.parse(date); const on = st.closed.includes(date); return html`
-          <button class="day ${on ? 'is-on' : ''}" type="button" data-act="close-day" data-date="${date}" aria-pressed="${on}"><div class="day__wd">${L.WD[d.getDay()]}</div><div class="day__n">${d.getDate()}</div><div class="day__free">${on ? 'закрыт' : ''}</div></button>`; })}</div>
-        <p class="demo-note">Закройте день и откройте запись как клиент: в этот день окон не будет</p></section>` : ''}`;
+          <button class="day ${on ? 'is-on' : ''}" type="button" data-act="close-day" data-date="${date}" aria-pressed="${on}"><div class="day__wd">${L.WD[d.getDay()]}</div><div class="day__n">${d.getDate()}</div><div class="day__free">${on ? 'закрыт' : ''}</div></button>`; })}</div></section>` : ''}
+      ${switchesBlock()}`;
   }
   INPUTS.price = (el) => {
     const v = Math.round(Math.max(0, Math.min(10000000, Number(el.value) || 0)));
@@ -1452,37 +1499,7 @@
     haptic.tap(); toast(store.get().closed.includes(d.date) ? `${L.dayTitle(d.date)}: запись закрыта` : `${L.dayTitle(d.date)}: снова открыт`); refresh();
   };
 
-  /* ================= Опции: пакеты и опции бота, переключатели для демо ================= */
 
-  function ownerOptions() {
-    const cur = planKey(); const d = store.get().demo;
-    const optState = (k) => (included(k) ? (d.off && d.off[k] ? 'off' : 'in') : (d.on && d.on[k] ? 'on' : 'off'));
-    return html`
-      <p class="demo-note" style="margin:0 4px 14px;text-align:left">Это демо: переключайте пакет и опции и смотрите, как меняется приложение у клиента и у вас. Настоящий набор зависит от пакета заведения.</p>
-      <div class="plans">${Object.entries(X.PLANS).map(([k, p]) => html`
-        <button class="plan ${k === cur ? 'is-on' : ''}" type="button" data-act="plan" data-v="${k}">
-          <span class="plan__title">${p.title}</span><span class="plan__price">${L.money(p.price)}</span><span class="plan__about">${p.about}</span>
-          ${k === cur ? html`<span class="chip chip--ok">${I.check}Сейчас</span>` : ''}
-        </button>`)}</div>
-      <section class="section"><div class="section__head"><h2 class="display h3">В пакете</h2></div>
-        <div class="list">${X.PLANS[cur].features.filter((k) => X.FEATURES[k]).map((k) => html`<div class="row is-on"><span class="tick">${I.checkBold}</span><div class="row__main"><div class="row__title">${X.FEATURES[k]}</div></div></div>`)}</div></section>
-      <section class="section"><div class="section__head"><h2 class="display h3">Опции</h2></div>
-        <div class="list">${Object.entries(X.OPTIONS).map(([k, o]) => { const s2 = optState(k); return html`
-          <label class="row opt"><div class="row__main"><div class="row__title">${o.title}</div><div class="row__sub">${o.about}</div><div class="row__sub">${s2 === 'in' ? 'входит в пакет' : cur === 'admin' && X.HEAVY.includes(k) ? `${L.money(Math.round(o.price * 0.7))} со скидкой 30%` : L.money(o.price)}</div></div>
-            <input class="switch" type="checkbox" data-in="opt" data-id="${k}" ${s2 === 'off' ? '' : 'checked'}></label>`; })}</div>
-        <p class="demo-note">Позже: мини-приложение 12 000 ₽ (вы в нём), несколько филиалов 7 000 ₽, учёт материалов 6 000 ₽</p></section>
-      <button class="btn btn--line btn--wide" style="margin-top:12px" type="button" data-act="plan-reset">Вернуть как у заведения</button>`;
-  }
-  ACTS.plan = (dd) => { store.update((s) => { s.demo.plan = dd.v; s.demo.on = {}; s.demo.off = {}; }); haptic.ok(); toast(`Пакет «${X.PLANS[dd.v].title}»: посмотрите вкладки клиента`); refresh(); };
-  ACTS['plan-reset'] = () => { store.update((s) => { s.demo = {}; }); haptic.tap(); refresh(); };
-  INPUTS.opt = (el) => {
-    const k = el.dataset.id;
-    store.update((s) => {
-      s.demo.on = s.demo.on || {}; s.demo.off = s.demo.off || {};
-      if (included(k)) { if (el.checked) delete s.demo.off[k]; else s.demo.off[k] = true; } else if (el.checked) s.demo.on[k] = true; else delete s.demo.on[k];
-    });
-    haptic.tap(); refresh();
-  };
   ACTS.mseg = (d) => { haptic.tap(); view.money = d.v; refresh(); };
 
   /* ---------- Запуск ---------- */

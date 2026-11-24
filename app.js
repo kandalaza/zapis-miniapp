@@ -65,6 +65,31 @@
   const firstPaid = venue.services.find((s) => s.p > 0) || venue.services[0];
   const minDur = Math.min(...venue.services.map((s) => s.d), 60);
 
+  /* ---------- Пакет и опции: как в боте (src/plans.js). Бот передаёт пакет и опции заведения,
+   * владелец в демо может переключать их на экране «Опции» (хранится только на этом телефоне). ---------- */
+  const X = window.Extras;
+  const planKey = () => { const d = store.get().demo; return Object.hasOwn(X.PLANS, d.plan || '') ? d.plan : params.plan; };
+  function has(key) {
+    const d = store.get().demo;
+    if (d.off && d.off[key]) return false;
+    if (X.PLANS[planKey()].features.includes(key)) return true;
+    if (params.options.includes(key)) return true;
+    return Boolean(d.on && d.on[key]);
+  }
+  const included = (key) => X.PLANS[planKey()].features.includes(key) || params.options.includes(key);
+  const basePrices = Object.fromEntries(venue.services.map((s) => [s.id, s.p]));
+  function applyPrices() { const pr = store.get().prices; venue.services.forEach((s) => { s.p = Number.isFinite(pr[s.id]) ? pr[s.id] : basePrices[s.id]; }); }
+  applyPrices();
+  const briefQs = () => X.brief(venue.sphere) || [];
+  const needBrief = (ids) => has('brief') && briefQs().length > 0 && ids.some((id) => svcById(id) && X.briefFor(venue.sphere, svcById(id).t));
+  function prepayFor(ids) {
+    if (!has('prepay')) return 0;
+    const sum = ids.reduce((a, id) => a + (svcById(id) ? svcById(id).p : 0), 0);
+    const rule = X.prepay(venue.sphere);
+    if (sum < rule.min) return 0;
+    return rule.amount || Math.max(500, Math.round((sum * rule.percent) / 100 / 100) * 100);
+  }
+
   store.update((s) => {
     if (s.seeded) return;
     s.seeded = true;
@@ -246,6 +271,7 @@
   const timeHero = (t) => { const [h, m] = t.split(':'); return html`${h}<span>:</span>${m}`; };
   const statusChip = (s) => ({
     pending: html`<span class="chip chip--wait">${I.clock}Ждёт подтверждения</span>`,
+    request: html`<span class="chip chip--wait">${I.clock}Мастер назначит время</span>`,
     confirmed: html`<span class="chip chip--ok">${I.check}Подтверждена</span>`,
     done: html`<span class="chip chip--off">Визит состоялся</span>`,
     cancelled: html`<span class="chip chip--off">Отменена</span>`,
@@ -257,11 +283,13 @@
   const durOf = (ids) => ids.reduce((a, id) => a + (svcById(id) ? svcById(id).d : 0), 0);
   const fromOf = (ids) => ids.some((id) => svcById(id) && svcById(id).f);
   const totalText = (ids) => { const s = sumOf(ids); return s ? `${fromOf(ids) ? 'от ' : ''}${L.money(s)}` : 'бесплатно'; };
-  const upcoming = () => store.get().bookings.filter((b) => ['pending', 'confirmed'].includes(b.status) && (b.date > L.today() || (b.date === L.today() && L.toMin(b.time) >= nowMin())))
+  const upcoming = () => store.get().bookings.filter((b) => (b.status === 'request') || (['pending', 'confirmed'].includes(b.status) && (b.date > L.today() || (b.date === L.today() && L.toMin(b.time) >= nowMin()))))
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   const past = () => store.get().bookings.filter((b) => !upcoming().includes(b)).sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
   const nowMin = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); };
-  const pendingRequests = () => owner.requests.filter((r) => !store.get().decided[r.id]).length + store.get().bookings.filter((b) => b.status === 'pending').length;
+  const pendingRequests = () => owner.requests.filter((r) => !store.get().decided[r.id]).length + store.get().bookings.filter((b) => ['pending', 'request'].includes(b.status)).length;
+  const whenText = (b) => (b.time ? `${L.dayTitle(b.date)}, ${b.time}` : `удобно: ${(b.days || [b.date]).map((d) => L.dayTitle(d).split(',')[0]).join(', ')}${b.parts && b.parts.length ? `, ${b.parts.join(', ').toLowerCase()}` : ''}`);
+  const Who = who[0].toUpperCase() + who.slice(1);
   const telHref = () => { const d = String(venue.phone).replace(/[^\d+]/g, ''); return d.length >= 6 ? `tel:${d}` : ''; };
   const mapHref = () => `https://yandex.ru/maps/?text=${encodeURIComponent(`${venue.name} ${venue.addressReal ? venue.address : ''}`.trim())}`;
 
@@ -373,14 +401,28 @@
     const first = near[0];
     const reviews = venue.base.reviews;
     let lead;
-    if (next) {
+    if (next && !next.time) {
+      lead = html`
+        <p class="hero__lead">Ваша заявка отправлена, <b>${whenText(next)}</b></p>
+        <div class="hero__time hero__time--word">Ждём ответа</div>
+        <div class="hero__chips">${statusChip(next.status)}<span class="chip">${next.titles[0]}</span></div>
+        <div class="hero__actions"><button class="btn btn--ghost btn--grow" type="button" data-act="tab" data-tab="bookings">Мои записи</button></div>`;
+    } else if (next) {
       lead = html`
         <p class="hero__lead">Ваша запись, <b>${L.dayTitle(next.date)}, ${L.dayLong(next.date)}</b></p>
         <div class="hero__time">${timeHero(next.time)}</div>
         <div class="hero__chips">${statusChip(next.status)}<span class="chip">${next.titles[0]}${next.titles.length > 1 ? ` +${next.titles.length - 1}` : ''}</span></div>
         <div class="hero__actions">
-          <button class="btn btn--light btn--grow" type="button" data-act="move" data-id="${next.id}">Перенести</button>
+          ${has('reschedule') ? html`<button class="btn btn--light btn--grow" type="button" data-act="move" data-id="${next.id}">Перенести</button>` : ''}
           <button class="btn btn--ghost btn--grow" type="button" data-act="tab" data-tab="bookings">Мои записи</button>
+        </div>`;
+    } else if (!has('selfbook')) {
+      lead = html`
+        <p class="hero__lead">Запись онлайн круглосуточно</p>
+        <div class="hero__time hero__time--word">Без звонков</div>
+        <p class="hero__lead">Выберите услугу и удобные дни, ${who} подберёт время и ответит в этом чате</p>
+        <div class="hero__actions" style="margin-top:16px">
+          <button class="btn btn--light btn--grow" type="button" data-act="book">Оставить заявку<span class="btn__go">${I.arrow}</span></button>
         </div>`;
     } else if (first) {
       lead = html`
@@ -420,7 +462,7 @@
           <button class="quick__item" type="button" data-act="link" data-href="${mapHref()}"><span class="quick__icon">${I.route}</span>Маршрут</button>
         </div>
 
-        ${near.length > 1 ? html`
+        ${near.length > 1 && has('selfbook') ? html`
         <section class="section rise" style="--i:2">
           <div class="section__head"><h2 class="display h3">Ближайшие <em>окна</em></h2><button class="section__link" type="button" data-act="book">Все</button></div>
           <div class="windows">${near.slice(next ? 0 : 1, (next ? 0 : 1) + 4).map((w) => html`
@@ -443,13 +485,15 @@
         <section class="section rise" style="--i:4">
           <div class="section__head"><h2 class="display h3">${venue.masters.length > 1 ? 'Наши' : 'Ваш'} <em>${venue.masters.length > 1 ? `${who}ы` : who}</em></h2></div>
           <div class="scroller">${venue.masters.map((m) => html`
-            <button class="master" type="button" data-act="book" data-master="${m.id}">
+            <button class="master" type="button" data-act="${has('portfolio') ? 'master-card' : 'book'}" data-master="${m.id}" data-id="${m.id}">
               <span class="avatar avatar--lg">${L.initials(m.name)}</span>
               <span class="master__name">${m.name}</span>
               <span class="master__role">${m.role}</span>
               <span class="master__rate">${I.star}${fmtRating(m.rating)}</span>
             </button>`)}</div>
         </section>
+
+        ${has('portfolio') ? worksSection() : ''}
 
         <section class="section rise" style="--i:5">
           <div class="section__head"><h2 class="display h3">Отзывы</h2>${venue.ratingSample ? html`<span class="tag tag--card">пример</span>` : ''}</div>
@@ -464,6 +508,8 @@
             </article>`)}</div>
         </section>
 
+        ${has('faq') ? faqSection() : ''}
+
         <section class="section rise" style="--i:6">
           <div class="section__head"><h2 class="display h3">Как <em>добраться</em></h2></div>
           <div class="list info">
@@ -477,6 +523,45 @@
         <p class="demo-note">Демо: окна и отзывы примерные, записи хранятся только на этом телефоне</p>`,
     };
   };
+
+  /* Работы мастеров (portfolio). Фото нет: карточки в стиле заведения с подписью, в боте здесь фото владельца. */
+  function workCard(title, m, i) {
+    return html`
+      <button class="work" type="button" data-act="work" data-i="${i}" style="--tint:${[14, 32, 22, 40, 18, 28][i % 6]}%">
+        ${art(look.pattern, 11 + i)}
+        <span class="work__tag">${m.name}</span>
+        <span class="work__title">${title}</span>
+      </button>`;
+  }
+  const worksList = () => X.works(venue.sphere).map((t, i) => ({ t, m: venue.masters[i % venue.masters.length], i }));
+  function worksSection() {
+    return html`
+      <section class="section rise" style="--i:4">
+        <div class="section__head"><h2 class="display h3">Наши <em>работы</em></h2><span class="tag tag--card">здесь ваши фото</span></div>
+        <div class="scroller">${worksList().map((w) => workCard(w.t, w.m, w.i))}</div>
+      </section>`;
+  }
+  ACTS.work = (d) => { const w = worksList()[Number(d.i)]; if (w) { haptic.tap(); masterSheet(w.m.id); } };
+  ACTS['master-card'] = (d) => { haptic.tap(); masterSheet(d.id); };
+  function masterSheet(id) {
+    const m = master(id);
+    const works = worksList().filter((w) => w.m.id === id);
+    openSheet(html`
+      <div class="master-head"><span class="avatar avatar--lg">${L.initials(m.name)}</span><div><h2 class="display h2">${m.name}</h2><div class="muted">${m.role} · ★ ${fmtRating(m.rating)} · ${m.since} ${L.plural(m.since, 'год', 'года', 'лет')} опыта</div></div></div>
+      <div class="works-grid">${works.map((w) => workCard(w.t, w.m, w.i))}</div>
+      <p class="demo-note">В вашем боте здесь будут настоящие фото работ: мастер добавляет их сам, прямо из Telegram</p>
+      <button class="btn btn--accent btn--wide" style="margin-top:14px" type="button" data-sheet="book-master" data-id="${m.id}">Записаться к ${m.name}<span class="btn__go">${I.arrow}</span></button>`);
+  }
+
+  /* Частые вопросы (faq). */
+  function faqSection() {
+    return html`
+      <section class="section rise" style="--i:5">
+        <div class="section__head"><h2 class="display h3">Частые <em>вопросы</em></h2></div>
+        <div class="list faq">${X.faq(venue.sphere).map(([q, a]) => html`
+          <details class="faq__item"><summary class="row"><div class="row__main"><div class="row__title">${q}</div></div>${I.chev}</summary><p>${a}</p></details>`)}</div>
+      </section>`;
+  }
 
   function promo() {
     return html`
@@ -536,7 +621,7 @@
         ${draft.fixed && sel.length && !keep ? html`<p class="demo-note">На ${draft.time} это не помещается, подберём другое время</p>` : ''}
         <p class="demo-note">Не знаете, что выбрать? <button type="button" class="section__link" data-act="ask">Спросите ${who}а</button>, можно прислать фото</p>`,
       main: sel.length
-        ? { text: keep ? `Проверить запись · ${total}` : `Выбрать время · ${total}`, onClick: () => { haptic.impact('light'); if (keep) go('confirm'); else nextAfterServices(); }, color: colors.accent, textColor: colors.accentInk }
+        ? { text: keep ? `Проверить запись · ${total}` : has('selfbook') ? `Выбрать время · ${total}` : `Выбрать удобные дни · ${total}`, onClick: () => { haptic.impact('light'); if (keep) go('confirm'); else nextAfterServices(); }, color: colors.accent, textColor: colors.accentInk }
         : { text: 'Выберите услугу', disabled: true, onClick: () => {}, color: colors.accent, textColor: colors.accentInk },
     };
   };
@@ -577,6 +662,7 @@
   ACTS['pick-master'] = (d) => { haptic.tap(); draft.masterId = d.id || null; draft.date = null; draft.time = null; go('time'); };
 
   SCREENS.time = () => {
+    if (!has('selfbook') && !draft.moveId) return requestDays();
     const dur = durOf(draft.services);
     const days = Array.from({ length: 14 }, (_, i) => { const date = L.addDays(L.today(), i); return { date, free: slots.free(date, draft.masterId, dur) }; });
     if (!draft.date || !days.find((x) => x.date === draft.date)) draft.date = (days.find((x) => x.free.size) || days[0]).date;
@@ -598,13 +684,14 @@
           <button class="day ${x.date === draft.date ? 'is-on' : ''} ${x.free.size ? '' : 'is-full'}" type="button" role="option" aria-selected="${x.date === draft.date}" data-act="pick-day" data-date="${x.date}">
             <div class="day__wd">${x.date === L.today() ? 'сегодня' : x.date === L.addDays(L.today(), 1) ? 'завтра' : L.WD[d.getDay()]}</div>
             <div class="day__n">${d.getDate()}</div>
-            <div class="day__free">${x.free.size ? `${x.free.size} ${L.plural(x.free.size, 'окно', 'окна', 'окон')}` : 'нет мест'}</div>
+            <div class="day__free">${x.free.size ? `${x.free.size} ${L.plural(x.free.size, 'окно', 'окна', 'окон')}` : store.get().closed.includes(x.date) ? 'закрыто' : 'нет мест'}</div>
           </button>`; })}</div>
         ${groups.length ? groups.map(([title, icon, list], gi) => html`
           <div class="card slots rise" style="--i:${gi + 2}">
             <div class="slots__head"><span>${icon}${title}</span><span class="muted small">${list.length} ${L.plural(list.length, 'окно', 'окна', 'окон')}</span></div>
             <div class="slots__grid">${list.map((mm) => { const t = L.toTime(mm); return html`<button class="slot ${draft.time === t ? 'is-on' : ''}" type="button" data-act="pick-time" data-time="${t}">${t}</button>`; })}</div>
           </div>`) : html`<div class="card empty-day">В этот день всё занято. Выберите другой день или <button type="button" class="section__link" data-act="ask">напишите ${who}у</button></div>`}
+        ${has('waitlist') && !moving ? waitlistCard() : ''}
         <p class="demo-note">Нет подходящего времени? <button type="button" class="section__link" data-act="ask">Напишите ${who}у</button>, подберём окно вручную</p>`,
       mount(el) { const on = el.querySelector('.day.is-on'); const box = el.querySelector('.days'); if (on && box) box.scrollLeft = Math.max(0, on.offsetLeft - box.offsetLeft - 16); },
       main: draft.time
@@ -613,6 +700,43 @@
     };
   };
   ACTS['pick-day'] = (d) => { haptic.tap(); draft.date = d.date; draft.time = null; refresh(); };
+
+  /* Лист ожидания (waitlist): занятый день, клиент встаёт в очередь, бот напишет, когда освободится окно. */
+  function waitlistCard() {
+    const on = store.get().waitlist.some((w) => w.date === draft.date && w.services.join() === draft.services.join());
+    return html`
+      <div class="card note rise" style="--i:5;margin-top:4px">${I.bell}<div style="flex:1"><b>Лист ожидания на ${L.dayTitle(draft.date)}</b><span class="muted">Если кто-то отменит запись, бот сразу напишет вам и предложит это время</span>
+        <div style="margin-top:10px">${on ? html`<span class="chip chip--ok">${I.check}Вы в листе ожидания</span>` : html`<button class="btn btn--soft btn--sm" type="button" data-act="waitlist">Встать в очередь</button>`}</div></div></div>`;
+  }
+  ACTS.waitlist = () => {
+    store.update((s) => { s.waitlist.push({ id: `w${Date.now().toString(36)}`, date: draft.date, services: [...draft.services], titles: draft.services.map((x) => svcById(x).t), masterId: draft.masterId || '', created: Date.now() }); });
+    haptic.ok(); toast('Готово. Как только освободится окно, бот напишет в этот чат'); refresh();
+  };
+
+  /* Заявка с удобными днями (пакет «Без потерянных заявок»): клиент выбирает дни и время суток, мастер назначает время. */
+  const PARTS = ['Утро', 'День', 'Вечер'];
+  function requestDays() {
+    draft.req = draft.req || { days: [], parts: [] };
+    const days = Array.from({ length: 14 }, (_, i) => L.addDays(L.today(), i)).filter((d) => !store.get().closed.includes(d));
+    const r = draft.req;
+    return {
+      html: html`
+        ${stepBar(3)}
+        <div class="page-title rise">${heading('Когда', 'удобно?')}<p>Отметьте удобные дни и время суток, ${who} подберёт время и напишет в этот чат</p></div>
+        <div class="days rise" style="--i:1">${days.map((date) => { const d = L.parse(date); return html`
+          <button class="day ${r.days.includes(date) ? 'is-on' : ''}" type="button" data-act="req-day" data-date="${date}" aria-pressed="${r.days.includes(date)}">
+            <div class="day__wd">${date === L.today() ? 'сегодня' : date === L.addDays(L.today(), 1) ? 'завтра' : L.WD[d.getDay()]}</div><div class="day__n">${d.getDate()}</div><div class="day__free">${r.days.includes(date) ? 'удобно' : ''}</div>
+          </button>`; })}</div>
+        <div class="card slots rise" style="--i:2"><div class="slots__head"><span>${I.clock}Время суток</span><span class="muted small">можно несколько</span></div>
+          <div class="slots__grid slots__grid--3">${PARTS.map((p) => html`<button class="slot ${r.parts.includes(p) ? 'is-on' : ''}" type="button" data-act="req-part" data-v="${p}">${p}</button>`)}</div></div>`,
+      main: r.days.length
+        ? { text: `Дальше · ${r.days.length} ${L.plural(r.days.length, 'день', 'дня', 'дней')}`, onClick: () => { haptic.impact('light'); draft.date = [...r.days].sort()[0]; draft.time = ''; go('confirm'); }, color: colors.accent, textColor: colors.accentInk }
+        : { text: 'Отметьте удобные дни', disabled: true, onClick: () => {}, color: colors.accent, textColor: colors.accentInk },
+    };
+  }
+  const toggle = (list, v) => { const i = list.indexOf(v); if (i >= 0) list.splice(i, 1); else list.push(v); };
+  ACTS['req-day'] = (d) => { haptic.tap(); toggle(draft.req.days, d.date); refresh(); };
+  ACTS['req-part'] = (d) => { haptic.tap(); toggle(draft.req.parts, d.v); refresh(); };
   ACTS['pick-time'] = (d) => {
     haptic.tap();
     draft.time = d.time;
@@ -632,7 +756,11 @@
     const u = window.TG.user();
     const name = draft.name ?? contact.name ?? (u ? [u.first_name, u.last_name].filter(Boolean).join(' ') : '');
     const phone = draft.phone ?? contact.phone ?? '';
-    const end = L.toTime(L.toMin(draft.time) + dur);
+    const isReq = !draft.time;
+    const end = isReq ? '' : L.toTime(L.toMin(draft.time) + dur);
+    const prepay = moving ? 0 : prepayFor(draft.services);
+    draft.brief = draft.brief || {};
+    const brief = !moving && needBrief(draft.services) ? briefQs() : [];
     return {
       html: html`
         ${moving ? '' : stepBar(4)}
@@ -640,7 +768,8 @@
         <article class="card ticket rise" style="--i:1">
           <div class="ticket__head">
             <div class="date-block"><b>${L.parse(draft.date).getDate()}</b><span>${L.MON[L.parse(draft.date).getMonth()].slice(0, 3)}</span></div>
-            <div><div class="small muted">${L.dayTitle(draft.date)}, ${L.WD_FULL[L.parse(draft.date).getDay()]}</div><div class="ticket__when">${draft.time}–${end}</div></div>
+            ${isReq ? html`<div><div class="small muted">Удобные дни</div><div class="ticket__when ticket__when--sm">${draft.req.days.slice().sort().map((d) => L.dayTitle(d).split(',')[0]).join(', ')}</div><div class="small muted">${draft.req.parts.length ? draft.req.parts.join(', ') : 'любое время'}</div></div>`
+              : html`<div><div class="small muted">${L.dayTitle(draft.date)}, ${L.WD_FULL[L.parse(draft.date).getDay()]}</div><div class="ticket__when">${draft.time}–${end}</div></div>`}
           </div>
           <div class="ticket__cut"></div>
           <dl>
@@ -648,8 +777,18 @@
             <div class="kv"><dt>${who[0].toUpperCase() + who.slice(1)}</dt><dd>${m.name}</dd></div>
             <div class="kv"><dt>Где</dt><dd>${venue.name}</dd></div>
             <div class="kv kv--total"><dt>Итого</dt><dd>${totalText(draft.services)}</dd></div>
+            ${prepay ? html`<div class="kv"><dt>Предоплата, чтобы закрепить время</dt><dd>${L.money(prepay)}</dd></div>` : ''}
           </dl>
         </article>
+        ${brief.length ? html`
+        <section class="section" style="margin-top:18px">
+          <div class="section__head"><h2 class="display h3">Расскажите <em>подробнее</em></h2></div>
+          <div class="list rise" style="--i:2">${brief.map((q, qi) => q.type === 'choice' ? html`
+            <div class="field"><span>${q.title}</span><div class="choices">${q.options.map((o) => html`<button type="button" class="choice ${draft.brief[qi] === o ? 'is-on' : ''}" data-act="brief-pick" data-q="${qi}" data-v="${o}">${o}</button>`)}</div></div>` : q.type === 'text' ? html`
+            <label class="field"><span>${q.title}</span><textarea data-in="brief" data-q="${qi}" rows="2" maxlength="300" placeholder="${q.hint || ''}">${draft.brief[qi] || ''}</textarea></label>` : html`
+            <div class="field"><span>${q.title}</span><label class="photo-pick">${I.plus}<span>${draft.photos ? `Добавлено фото: ${draft.photos}` : 'Прикрепить фото'}</span><input type="file" accept="image/*" multiple data-in="photos" hidden></label></div>`)}
+          </div>
+        </section>` : ''}
         ${moving ? '' : html`
         <section class="section" style="margin-top:18px">
           <div class="list rise" style="--i:2">
@@ -657,19 +796,26 @@
             <label class="field" data-f="phone"><span>Телефон</span><input data-in="phone" type="tel" inputmode="tel" autocomplete="tel" maxlength="20" value="${phone}" placeholder="+7 900 000-00-00"></label>
             ${window.TG.version('6.9') && !phone ? html`<div class="field"><button class="btn btn--soft btn--sm" type="button" data-act="tg-phone">${I.phone}Взять номер из Telegram</button></div>` : ''}
             <label class="field"><span>Пожелания, если есть</span><textarea data-in="comment" rows="2" maxlength="300" placeholder="Например: хочу как в прошлый раз">${draft.comment || ''}</textarea></label>
+            ${has('birthday') ? html`<label class="field"><span>День рождения, если хотите подарок</span><input data-in="birthday" type="date" value="${draft.birthday || ''}"></label>` : ''}
+            ${has('sources') ? html`<div class="field"><span>Откуда вы о нас узнали?</span><div class="choices">${X.SOURCES.map((o) => html`<button type="button" class="choice ${draft.source === o ? 'is-on' : ''}" data-act="source" data-v="${o}">${o}</button>`)}</div></div>` : ''}
           </div>
         </section>`}
         <div class="list rise" style="--i:3;margin-top:12px">
-          <div class="note">${I.bell}<div><b>Напомним накануне и за 2 часа</b><span class="muted">Сообщение придёт в этот чат, в нём можно подтвердить или перенести</span></div></div>
-          <div class="note">${I.shield}<div><b>Без предоплаты и без регистрации</b><span class="muted">Отменить или перенести бесплатно можно здесь же, в «Моих записях», не позже чем за 3 часа</span></div></div>
+          ${has('reminders') ? html`<div class="note">${I.bell}<div><b>Напомним накануне и за 2 часа</b><span class="muted">Сообщение придёт в этот чат, в нём можно подтвердить или перенести</span></div></div>` : ''}
+          <div class="note">${I.shield}<div><b>${prepay ? `Предоплата ${L.money(prepay)}, без регистрации` : 'Без предоплаты и без регистрации'}</b><span class="muted">${prepay ? 'Реквизиты придут после записи. Без оплаты бронь снимется сама через 2 часа' : has('reschedule') ? 'Отменить или перенести бесплатно можно здесь же, в «Моих записях», не позже чем за 3 часа' : 'Если планы изменятся, напишите в этот чат'}</span></div></div>
         </div>`,
-      main: { text: moving ? `Перенести на ${draft.time}` : `Записаться · ${totalText(draft.services)}`, onClick: submit, color: colors.accent, textColor: colors.accentInk },
+      main: { text: moving ? `Перенести на ${draft.time}` : isReq ? 'Отправить заявку' : `Записаться · ${totalText(draft.services)}`, onClick: submit, color: colors.accent, textColor: colors.accentInk },
     };
   };
   ACTS['tg-phone'] = async () => { const p = await window.TG.requestPhone(); if (p) { draft.phone = p.startsWith('+') ? p : `+${p}`; haptic.ok(); refresh(); } };
   INPUTS.name = (el) => { draft.name = el.value; el.closest('.field').classList.remove('is-bad'); };
   INPUTS.phone = (el) => { draft.phone = el.value; el.closest('.field').classList.remove('is-bad'); };
   INPUTS.comment = (el) => { draft.comment = el.value; };
+  INPUTS.brief = (el) => { draft.brief[el.dataset.q] = el.value.slice(0, 300); };
+  INPUTS.birthday = (el) => { draft.birthday = /^\d{4}-\d{2}-\d{2}$/.test(el.value) ? el.value : ''; };
+  INPUTS.photos = (el) => { draft.photos = Math.min(10, el.files ? el.files.length : 0); haptic.ok(); refresh(); };
+  ACTS['brief-pick'] = (d) => { haptic.tap(); draft.brief[d.q] = draft.brief[d.q] === d.v ? '' : d.v; refresh(); };
+  ACTS.source = (d) => { haptic.tap(); draft.source = draft.source === d.v ? '' : d.v; refresh(); };
 
   let submitting = false;
   function submit() {
@@ -696,7 +842,8 @@
     setTimeout(() => {
       submitting = false;
       const dur = durOf(draft.services);
-      const stillFree = slots.free(draft.date, draft.assigned, dur).has(L.toMin(draft.time)) || (moving && moving.date === draft.date && moving.time === draft.time);
+      const isReq = !draft.time;
+      const stillFree = isReq || slots.free(draft.date, draft.assigned, dur).has(L.toMin(draft.time)) || (moving && moving.date === draft.date && moving.time === draft.time);
       if (!stillFree && !moving) { haptic.warn(); toast('Это время только что заняли. Выберите другое'); goBack(); return; }
       let id;
       store.update((s) => {
@@ -706,7 +853,11 @@
         } else {
           id = `b${Date.now().toString(36)}`;
           s.contact = { name, phone };
-          s.bookings.push({ id, services: [...draft.services], titles: draft.services.map((x) => svcById(x).t), masterId: draft.assigned, date: draft.date, time: draft.time, dur, total: sumOf(draft.services), status: 'pending', name, phone, comment: String(draft.comment || '').slice(0, 300), created: Date.now() });
+          const qs = needBrief(draft.services) ? briefQs() : [];
+          const briefLines = qs.map((q, qi) => (q.type === 'photo' ? (draft.photos ? `${q.title}: ${draft.photos} фото` : '') : draft.brief && draft.brief[qi] ? `${q.title}: ${draft.brief[qi]}` : '')).filter(Boolean);
+          const prepay = prepayFor(draft.services);
+          s.bookings.push({ id, services: [...draft.services], titles: draft.services.map((x) => svcById(x).t), masterId: draft.assigned, date: draft.date, time: draft.time, dur, total: sumOf(draft.services), status: isReq ? 'request' : 'pending', name, phone, comment: String(draft.comment || '').slice(0, 300), created: Date.now(),
+            days: isReq ? [...draft.req.days].sort() : null, parts: isReq ? [...draft.req.parts] : null, brief: briefLines, birthday: draft.birthday || '', source: draft.source || '', prepay, prepayStatus: prepay ? 'wait' : '' });
         }
       });
       haptic.ok();
@@ -723,21 +874,22 @@
         <div class="done">
           <div class="done__mark" style="position:relative"><span class="done__ring"></span>${svg('<path d="M5 12.5l4.5 4.5L19 7.5" stroke-width="2.6"/>')}</div>
           ${heading(moved ? 'Запись' : 'Заявка', moved ? 'перенесена' : 'отправлена')}
-          <p>${m.name} подтвердит время, и бот пришлёт сообщение в этот чат. Накануне придёт напоминание.</p>
+          <p>${b.time ? `${m.name} подтвердит время, и бот пришлёт сообщение в этот чат.${has('reminders') ? ' Накануне придёт напоминание.' : ''}` : `${Who} посмотрит удобные дни, назначит время и напишет в этот чат.`}</p>
         </div>
         <article class="card ticket rise" style="--i:2;margin-top:24px">
           <dl>
-            <div class="kv"><dt>Когда</dt><dd>${L.dayTitle(b.date)}, ${b.time}</dd></div>
+            <div class="kv"><dt>Когда</dt><dd>${whenText(b)}</dd></div>
             <div class="kv"><dt>Услуга</dt><dd>${b.titles.join(', ')}</dd></div>
             <div class="kv"><dt>${who[0].toUpperCase() + who.slice(1)}</dt><dd>${m.name}</dd></div>
             <div class="kv"><dt>Статус</dt><dd>${statusChip(b.status)}</dd></div>
           </dl>
-          <button class="btn btn--soft btn--wide" style="margin:6px 0 14px" type="button" data-act="calendar" data-id="${b.id}">${I.cal}Добавить в календарь</button>
+          ${b.time ? html`<button class="btn btn--soft btn--wide" style="margin:6px 0 14px" type="button" data-act="calendar" data-id="${b.id}">${I.cal}Добавить в календарь</button>` : ''}
         </article>
-        <section class="section rise" style="--i:3">
+        ${b.prepay ? prepayCard(b) : ''}
+        ${has('reminders') && b.time ? html`<section class="section rise" style="--i:3">
           <div class="section__head"><h2 class="display h3">Так придёт <em>напоминание</em></h2></div>
           ${reminder(b)}
-        </section>
+        </section>` : ''}
         <aside class="card card--pad rise" style="--i:4;margin-top:16px;display:flex;gap:14px;align-items:center">
           <span class="info__icon">${I.store}</span>
           <div style="flex:1"><b>Посмотрите глазами владельца</b><div class="small muted">Ваша заявка уже ждёт во вкладке «Владелец»</div></div>
@@ -746,6 +898,21 @@
       main: { text: 'Мои записи', onClick: () => { haptic.tap(); backToRoot('bookings'); }, color: colors.accent, textColor: colors.accentInk },
     };
   };
+
+  /* Предоплата (prepay): реквизиты, «Я оплатил», без оплаты бронь снимается сама. */
+  function prepayCard(b) {
+    const st = b.prepayStatus;
+    return html`
+      <section class="card card--pad rise" style="--i:3;margin-top:16px">
+        <p class="eyebrow" style="margin-bottom:6px">Предоплата</p>
+        <div class="money-big" style="font-size:34px">${L.money(b.prepay)}</div>
+        <p class="small muted" style="margin:8px 0 12px">${st === 'paid' ? 'Мастер подтвердил оплату, время закреплено за вами.' : st === 'sent' ? 'Мастер проверит перевод и подтвердит. Обычно это пара минут.' : 'Переведите в течение 2 часов, иначе бронь снимется сама. Остальное оплачивается на месте.'}</p>
+        ${st === 'paid' || st === 'sent' ? html`<span class="chip ${st === 'paid' ? 'chip--ok' : 'chip--wait'}">${st === 'paid' ? 'Оплачено' : 'Проверяем оплату'}</span>`
+          : html`<div class="bubble-wrap" style="margin-bottom:12px"><div class="small">Реквизиты: <b>пример, в вашем боте здесь ваши реквизиты или ссылка на оплату</b></div></div>
+            <button class="btn btn--accent btn--wide" type="button" data-act="paid" data-id="${b.id}">Я оплатил</button>`}
+      </section>`;
+  }
+  ACTS.paid = (d) => { store.update((s) => { const b = s.bookings.find((x) => x.id === d.id); if (b) b.prepayStatus = 'sent'; }); haptic.ok(); toast('Отправили мастеру. Он проверит перевод'); refresh(); };
 
   /* В календарь: в Telegram ссылка Google Календаря, в браузере файл .ics (откроется в Календаре iPhone). */
   function addToCalendar(b) {
@@ -800,27 +967,40 @@
             <div class="date-block ${isUp ? '' : 'date-block--past'}"><b>${d.getDate()}</b><span>${L.MON[d.getMonth()].slice(0, 3)}</span></div>
             <div style="flex:1;min-width:0">
               <div class="booking__title">${b.titles.join(', ')}</div>
-              <div class="booking__sub">${L.dayTitle(b.date)}, ${b.time} · ${m.name} · ${b.total ? L.money(b.total) : 'бесплатно'}</div>
+              <div class="booking__sub">${whenText(b)} · ${m.name} · ${b.total ? L.money(b.total) : 'бесплатно'}</div>
               ${statusChip(b.status)}
             </div>
           </div>
           ${isUp ? html`
+            ${b.prepay && b.prepayStatus !== 'paid' ? html`<div class="booking__foot"><span>Предоплата ${L.money(b.prepay)}</span>${b.prepayStatus === 'sent' ? html`<span class="chip chip--wait">Проверяем</span>` : html`<button class="btn btn--accent btn--sm" type="button" data-act="paid" data-id="${b.id}">Я оплатил</button>`}</div>` : ''}
             <div class="booking__actions">
-              <button class="btn btn--soft btn--sm btn--grow" type="button" data-act="move" data-id="${b.id}">${I.repeat}Перенести</button>
+              ${has('reschedule') && b.time ? html`<button class="btn btn--soft btn--sm btn--grow" type="button" data-act="move" data-id="${b.id}">${I.repeat}Перенести</button>` : ''}
               <button class="btn btn--danger btn--sm" type="button" data-act="cancel" data-id="${b.id}">Отменить</button>
             </div>
-            <div class="booking__foot"><button class="section__link" type="button" data-act="calendar" data-id="${b.id}">В календарь</button><button class="section__link" type="button" data-act="show-reminder" data-id="${b.id}">Как придёт напоминание</button></div>`
+            ${b.time ? html`<div class="booking__foot"><button class="section__link" type="button" data-act="calendar" data-id="${b.id}">В календарь</button>${has('reminders') ? html`<button class="section__link" type="button" data-act="show-reminder" data-id="${b.id}">Как придёт напоминание</button>` : ''}</div>` : ''}`
           : b.status === 'done' ? html`
+            ${has('return') ? returnNote(b) : ''}
             <div class="booking__foot">
-              ${b.review ? html`<span>${stars(b.review.stars)}</span>` : html`<span class="muted">Как всё прошло?</span>`}
-              ${b.review ? html`<button class="section__link" type="button" data-act="repeat" data-id="${b.id}">Записаться снова</button>` : html`<button class="btn btn--accent btn--sm" type="button" data-act="review" data-id="${b.id}">Оценить визит</button>`}
-            </div>` : ''}
+              ${has('reviews') ? (b.review ? html`<span>${stars(b.review.stars)}</span>` : html`<span class="muted">Как всё прошло?</span>`) : html`<span class="muted">Спасибо, что пришли</span>`}
+              ${!has('reviews') || b.review ? html`<button class="section__link" type="button" data-act="repeat" data-id="${b.id}">Записаться снова</button>` : html`<button class="btn btn--accent btn--sm" type="button" data-act="review" data-id="${b.id}">Оценить визит</button>`}
+            </div>
+            ${has('memo') || has('team') ? html`<div class="booking__foot">${has('memo') ? html`<button class="section__link" type="button" data-act="memo" data-id="${b.id}">Памятка после визита</button>` : html`<span></span>`}${has('team') ? html`<button class="section__link" type="button" data-act="tips" data-id="${b.id}">Чаевые ${m.name}</button>` : ''}</div>` : ''}` : ''}
         </article>`;
     };
     return {
       html: html`
         <div style="height:calc(var(--safe-top) + 18px)"></div>
         <div class="page-title rise">${heading('Мои', 'записи')}</div>
+        ${has('referral') ? html`
+          <aside class="promo promo--sm rise" style="margin:0 0 16px">
+            ${art(look.pattern, 21)}
+            <p class="eyebrow">Приведите друга</p>
+            <h3 class="display h3">Вам и другу <em>−10%</em></h3>
+            <p>Отправьте личную ссылку: когда друг запишется по ней, скидка придёт вам обоим.</p>
+            <button class="btn btn--light btn--sm" type="button" data-act="share">Поделиться ссылкой</button>
+          </aside>` : ''}
+        ${has('waitlist') && store.get().waitlist.length ? html`<div class="list rise" style="margin-bottom:16px">${store.get().waitlist.map((w) => html`
+          <div class="row"><span class="info__icon">${I.bell}</span><div class="row__main"><div class="row__title">Лист ожидания, ${L.dayTitle(w.date)}</div><div class="row__sub">${w.titles.join(', ')} · напишем, когда освободится окно</div></div><button class="section__link" type="button" data-act="wl-off" data-id="${w.id}">Убрать</button></div>`)}</div>` : ''}
         <div class="seg" role="tablist">
           <button type="button" role="tab" class="${view.bookings === 'up' ? 'is-on' : ''}" data-act="bseg" data-v="up">Предстоящие${up.length ? ` · ${up.length}` : ''}</button>
           <button type="button" role="tab" class="${view.bookings === 'past' ? 'is-on' : ''}" data-act="bseg" data-v="past">Прошедшие</button>
@@ -835,6 +1015,23 @@
     };
   };
   ACTS.bseg = (d) => { haptic.tap(); view.bookings = d.v; refresh(); };
+  ACTS['wl-off'] = (d) => { store.update((s) => { s.waitlist = s.waitlist.filter((w) => w.id !== d.id); }); haptic.tap(); refresh(); };
+  ACTS.share = () => {
+    const text = `Записываюсь в «${venue.name}» прямо в Telegram, очень удобно. По моей ссылке у тебя скидка 10%`;
+    window.TG.openLink(`https://t.me/share/url?url=${encodeURIComponent(location.origin + location.pathname)}&text=${encodeURIComponent(text)}`);
+  };
+  /* «Пора снова» (return): через нужный срок бот сам зовёт. */
+  function returnNote(b) {
+    const days = X.returnDays(venue.sphere);
+    const left = days - L.daysBetween(b.date, L.today());
+    return html`<div class="note" style="padding:12px 0 0">${I.repeat}<div><b>${left > 0 ? `Через ${left} ${L.plural(left, 'день', 'дня', 'дней')} пора снова` : 'Пора снова'}</b><span class="muted">Бот сам напомнит через ${days} ${L.plural(days, 'день', 'дня', 'дней')} после визита. Можно записаться заранее.</span></div></div>`;
+  }
+  ACTS.memo = () => openSheet(html`<div class="page-title">${heading('Памятка', 'после визита', 'h2')}<p>Бот присылает её сам на следующий день после визита.</p></div><div class="bubble-wrap"><div class="bubble"><div class="bubble__from">${venue.name}</div>${X.after(venue.sphere)}<div class="bubble__time">10:00</div></div></div><button class="btn btn--plain btn--wide" style="margin-top:18px" type="button" data-sheet="close">Понятно</button>`);
+  ACTS.tips = (d) => {
+    const b = store.get().bookings.find((x) => x.id === d.id); const m = master(b.masterId) || venue.masters[0];
+    openSheet(html`<div class="page-title" style="text-align:center">${heading('Чаевые', m.name, 'h2')}<p>Деньги уходят мастеру напрямую. В вашем боте здесь ссылка мастера на перевод.</p></div>
+      <div class="choices choices--center">${[100, 200, 300, 500].map((v) => html`<button type="button" class="choice choice--lg" data-sheet="tip" data-v="${v}">${L.money(v)}</button>`)}</div>`);
+  };
   ACTS.move = (d) => {
     const b = store.get().bookings.find((x) => x.id === d.id);
     if (!b) return;
@@ -898,6 +1095,30 @@
     if (!el) return;
     const act = el.dataset.sheet;
     if (act === 'close') closeSheet();
+    if (act === 'book-master') { const id = el.dataset.id; closeSheet(); setTimeout(() => ACTS.book({ master: id }), 300); }
+    if (act === 'm-svc' || act === 'm-time') {
+      manualDraft.name = (sheet.querySelector('[data-sheet-in="m-name"]') || {}).value || '';
+      manualDraft.phone = (sheet.querySelector('[data-sheet-in="m-phone"]') || {}).value || '';
+      if (act === 'm-svc') { manualDraft.sid = el.dataset.v; manualDraft.time = ''; } else manualDraft.time = el.dataset.v;
+      haptic.tap(); drawManual();
+    }
+    if (act === 'm-save') {
+      const name = String((sheet.querySelector('[data-sheet-in="m-name"]') || {}).value || '').trim().slice(0, 40);
+      if (!name || !manualDraft.time) { haptic.warn(); toast(!name ? 'Как зовут клиента?' : 'Выберите время'); return; }
+      const sv = svcById(manualDraft.sid);
+      store.update((st) => { st.manual.push({ id: `m${Date.now().toString(36)}`, date: manualDraft.date, time: manualDraft.time, dur: sv.d, title: sv.t, price: sv.p, name, masterId: view.schedMaster }); });
+      haptic.ok(); toast(`Записали ${name} на ${manualDraft.time}. Бот даст ссылку для напоминаний`); closeSheet(); refresh();
+    }
+    if (act === 'note-save') {
+      const v = String((sheet.querySelector('[data-sheet-in="note"]') || {}).value || '').slice(0, 300);
+      store.update((st) => { st.notes[el.dataset.id] = v; }); haptic.ok(); toast('Заметка сохранена'); closeSheet();
+    }
+    if (act === 'black') {
+      store.update((st) => { if (st.black[el.dataset.id]) delete st.black[el.dataset.id]; else st.black[el.dataset.id] = true; });
+      haptic.impact('medium'); toast(store.get().black[el.dataset.id] ? 'В чёрном списке: записаться сможет только с предоплатой' : 'Убрали из чёрного списка'); closeSheet(); refresh();
+    }
+    if (act === 'bc-send') { haptic.ok(); toast(`Рассылка ушла ${owner.clients.length} клиентам`); closeSheet(); }
+    if (act === 'tip') { haptic.ok(); toast(`Спасибо! ${L.money(Number(el.dataset.v))} ушли мастеру`); closeSheet(); }
     if (act === 'star') { haptic.tap(); reviewDraft.stars = Number(el.dataset.n); drawReview(); }
     if (act === 'save') {
       const text = (sheet.querySelector('[data-sheet-in="text"]') || {}).value || '';
@@ -916,13 +1137,15 @@
     const today = owner.daySchedule(L.today());
     const freeWeek = Array.from({ length: 7 }, (_, i) => slots.free(L.addDays(L.today(), i), null, 60).size).reduce((a, x) => a + x, 0);
     const pend = pendingRequests();
-    const tabs = [['req', `Заявки${pend ? ` · ${pend}` : ''}`], ['day', 'Расписание'], ['clients', 'Клиенты'], ['money', 'Выручка']];
-    const body = { req: ownerRequests, day: ownerSchedule, clients: ownerClients, money: ownerMoney }[view.owner]();
+    const tabs = [['req', `Заявки${pend ? ` · ${pend}` : ''}`], ['day', 'Расписание'], has('clientbase') ? ['clients', 'Клиенты'] : null,
+      ['money', has('accounting') ? 'Выручка' : 'Отчёт'], has('settings') || has('closeday') ? ['settings', 'Настройки'] : null, ['options', 'Опции']].filter(Boolean);
+    if (!tabs.some(([k]) => k === view.owner)) view.owner = 'req';
+    const body = { req: ownerRequests, day: ownerSchedule, clients: ownerClients, money: ownerMoney, settings: ownerSettings, options: ownerOptions }[view.owner]();
     return {
       html: html`
         <header class="owner-head">
           ${art(look.pattern, 3)}
-          <p class="eyebrow">Так это видит владелец <span class="tag">пример</span></p>
+          <p class="eyebrow">Так это видит владелец <span class="tag">пример</span> <span class="tag">${X.PLANS[planKey()].title}</span></p>
           <h1 class="display h1">${venue.name.length > 22 ? 'Ваша студия' : venue.name} <em>сегодня</em></h1>
           <p>${L.WD_FULL[new Date().getDay()]}, ${L.dayLong(L.today())}</p>
           <div class="stats">
@@ -939,9 +1162,10 @@
   ACTS.oseg = (d) => { haptic.tap(); view.owner = d.v; refresh(); };
 
   function ownerRequests() {
-    const own = store.get().bookings.filter((b) => b.status === 'pending').map((b) => ({
+    const own = store.get().bookings.filter((b) => ['pending', 'request'].includes(b.status)).map((b) => ({
       id: b.id, own: true, client: b.name || 'Вы', phone: b.phone, visits: 0, service: b.titles.join(', '), price: b.total, dur: b.dur,
-      date: b.date, time: b.time, master: (master(b.masterId) || venue.masters[0]).name, comment: b.comment,
+      date: b.date, time: b.time, when: whenText(b), master: (master(b.masterId) || venue.masters[0]).name, comment: b.comment,
+      brief: b.brief || [], source: b.source, prepay: b.prepay, prepayStatus: b.prepayStatus, birthday: b.birthday,
     }));
     const list = [...own, ...owner.requests.filter((r) => !store.get().decided[r.id])];
     if (!list.length) {
@@ -954,21 +1178,44 @@
           <span class="avatar">${L.initials(r.client)}</span>
           <div class="req__who"><div class="req__name">${r.client} ${r.own ? html`<span class="chip" style="margin-left:4px">это вы</span>` : ''}</div><div class="row__sub">${visitsText(r.visits)}${r.phone ? ` · ${r.phone}` : ''}</div></div>
         </div>
-        <div class="req__when">${L.dayTitle(r.date)}, ${r.time}</div>
+        <div class="req__when">${r.when || `${L.dayTitle(r.date)}, ${r.time}`}</div>
         <div class="row__sub" style="font-size:14px">${r.service} · ${r.master} · ${r.price ? L.money(r.price) : 'бесплатно'}</div>
         ${r.comment ? html`<p class="req__comment">«${r.comment}»</p>` : ''}
+        ${r.brief && r.brief.length ? html`<div class="req__comment"><b>Бриф</b>${r.brief.map((l) => html`<div>${l}</div>`)}</div>` : ''}
+        ${r.source || r.birthday ? html`<div class="chips-row">${r.source ? html`<span class="chip">Откуда: ${r.source}</span>` : ''}${r.birthday ? html`<span class="chip">ДР ${r.birthday.slice(8)}.${r.birthday.slice(5, 7)}</span>` : ''}</div>` : ''}
+        ${r.prepay ? html`<div class="booking__foot" style="margin-top:10px"><span>Предоплата ${L.money(r.prepay)}: ${r.prepayStatus === 'paid' ? 'получена' : r.prepayStatus === 'sent' ? 'клиент оплатил' : 'ждём'}</span>${r.prepayStatus === 'sent' ? html`<button class="btn btn--soft btn--sm" type="button" data-act="prepay-ok" data-id="${r.id}">Деньги пришли</button>` : ''}</div>` : ''}
         <div class="req__btns">
-          <button class="btn btn--accent btn--sm" type="button" data-act="decide" data-id="${r.id}" data-v="ok" data-own="${r.own ? 1 : 0}">${I.check}Подтвердить</button>
+          <button class="btn btn--accent btn--sm" type="button" data-act="decide" data-id="${r.id}" data-v="ok" data-own="${r.own ? 1 : 0}">${I.check}${r.time === '' ? 'Назначить время' : 'Подтвердить'}</button>
           <button class="btn btn--line btn--sm" type="button" data-act="decide" data-id="${r.id}" data-v="no" data-own="${r.own ? 1 : 0}">Отклонить</button>
         </div>
       </article>`)}
-      <p class="demo-note">Нажмите «Подтвердить»: клиент сразу получит сообщение от бота</p>`;
+      <p class="demo-note">Нажмите «Подтвердить»: клиент сразу получит сообщение от бота</p>
+      ${has('waitlist') ? waitlistOwner() : ''}`;
   }
+  function waitlistOwner() {
+    const sample = [{ name: 'Ирина К.', when: 'завтра', what: venue.services[0].t }, { name: 'Олег М.', when: 'в субботу', what: (venue.services[1] || venue.services[0]).t }];
+    const own = store.get().waitlist.map((w) => ({ name: `${(store.get().contact || {}).name || 'Вы'} (это вы)`, when: L.dayTitle(w.date), what: w.titles.join(', ') }));
+    return html`<section class="section"><div class="section__head"><h2 class="display h3">Лист <em>ожидания</em></h2></div>
+      <div class="list">${[...own, ...sample].map((w) => html`<div class="row"><span class="avatar">${L.initials(w.name)}</span><div class="row__main"><div class="row__title">${w.name}</div><div class="row__sub">${w.what} · ${w.when}</div></div></div>`)}</div>
+      <p class="demo-note">Когда кто-то отменит запись, бот сам предложит освободившееся время первому в очереди</p></section>`;
+  }
+  ACTS['prepay-ok'] = (d) => { store.update((s) => { const b = s.bookings.find((x) => x.id === d.id); if (b) b.prepayStatus = 'paid'; }); haptic.ok(); toast('Отметили оплату. Клиенту пришло подтверждение'); refresh(); };
   ACTS.decide = (d, el) => {
     const card = el.closest('.req');
     if (d.v === 'ok') haptic.ok(); else haptic.impact('medium');
     store.update((s) => {
-      if (d.own === '1') { const b = s.bookings.find((x) => x.id === d.id); if (b) b.status = d.v === 'ok' ? 'confirmed' : 'declined'; } else s.decided[d.id] = d.v;
+      if (d.own === '1') {
+        const b = s.bookings.find((x) => x.id === d.id);
+        if (b && b.status === 'request' && d.v === 'ok') {
+          // Назначаем первое свободное время в удобные клиенту дни и время суток.
+          const ok = (m) => !b.parts || !b.parts.length || b.parts.some((p) => (p === 'Утро' ? m < 720 : p === 'День' ? m >= 720 && m < 1020 : m >= 1020));
+          for (const day of b.days || [b.date]) {
+            const hit = [...slots.free(day, null, b.dur).entries()].find(([m]) => ok(m));
+            if (hit) { b.date = day; b.time = L.toTime(hit[0]); b.masterId = hit[1]; break; }
+          }
+          b.status = b.time ? 'confirmed' : 'request';
+        } else if (b) b.status = d.v === 'ok' ? 'confirmed' : 'declined';
+      } else s.decided[d.id] = d.v;
     });
     toast(d.v === 'ok' ? (d.own === '1' ? 'Подтвердили. Загляните в «Записи»: статус уже обновился' : 'Подтвердили. Клиенту ушло сообщение') : 'Отклонили. Клиенту предложили выбрать другое время');
     card.classList.add('is-gone');
@@ -1004,6 +1251,7 @@
     }
     if (venue.close - t >= 60) items.push({ free: true, from: L.toTime(t), to: L.toTime(venue.close) });
     return html`${sub}
+      ${has('manual') ? html`<button class="btn btn--plain btn--wide" style="margin-bottom:12px" type="button" data-act="manual">${I.plus}Записать клиента, если позвонил</button>` : ''}
       <div class="days" style="margin-bottom:12px">${days.map((date) => { const d = L.parse(date); return html`
         <button class="day ${date === view.schedDay ? 'is-on' : ''}" type="button" data-act="sday" data-date="${date}">
           <div class="day__wd">${date === L.today() ? 'сегодня' : L.WD[d.getDay()]}</div><div class="day__n">${d.getDate()}</div><div class="day__free">${owner.daySchedule(date).length} зап.</div>
@@ -1019,7 +1267,30 @@
             <div class="row__sub">${x.service}${x.price ? ` · ${L.money(x.price)}` : ''}</div>
             ${x.status === 'pending' ? html`<div style="margin-top:6px">${statusChip('pending')}</div>` : ''}
           </div>
-        </div>`)}</div>`;
+        </div>`)}</div>
+      ${has('evening') ? eveningPreview() : ''}`;
+  }
+  function eveningPreview() {
+    const tomorrow = owner.daySchedule(L.addDays(L.today(), 1));
+    return html`<section class="section"><div class="section__head"><h2 class="display h3">Каждый вечер <em>в 20:00</em></h2></div>
+      <div class="bubble-wrap"><div class="bubble"><div class="bubble__from">Бот записи</div><b>Завтра ${tomorrow.length} ${L.plural(tomorrow.length, 'запись', 'записи', 'записей')}</b><br>${tomorrow.slice(0, 4).map((x) => html`${x.time} ${x.client.split(' (')[0]}, ${lower(x.service)}<br>`)}${tomorrow.length > 4 ? `и ещё ${tomorrow.length - 4}` : ''}<div class="bubble__time">20:00</div></div></div></section>`;
+  }
+  /* Ручная запись (manual): клиент позвонил, владелец записывает в пару нажатий. */
+  let manualDraft = null;
+  ACTS.manual = () => { manualDraft = { name: '', phone: '', sid: venue.services[0].id, date: view.schedDay, time: '' }; drawManual(); };
+  function drawManual() {
+    const md = manualDraft; const s = svcById(md.sid);
+    const free = [...slots.free(md.date, view.schedMaster, s.d).keys()].slice(0, 12);
+    openSheet(html`
+      <div class="page-title">${heading('Записать', 'клиента', 'h2')}<p>${L.dayTitle(md.date)} · ${(master(view.schedMaster) || venue.masters[0]).name}</p></div>
+      <div class="list">
+        <label class="field"><span>Имя</span><input data-sheet-in="m-name" maxlength="40" value="${md.name}" placeholder="Анна"></label>
+        <label class="field"><span>Телефон</span><input data-sheet-in="m-phone" type="tel" maxlength="20" value="${md.phone}" placeholder="+7 900 000-00-00"></label>
+        <div class="field"><span>Услуга</span><div class="choices">${venue.services.map((x) => html`<button type="button" class="choice ${x.id === md.sid ? 'is-on' : ''}" data-sheet="m-svc" data-v="${x.id}">${x.t}</button>`)}</div></div>
+        <div class="field"><span>Время</span><div class="choices">${free.length ? free.map((m) => html`<button type="button" class="choice ${md.time === L.toTime(m) ? 'is-on' : ''}" data-sheet="m-time" data-v="${L.toTime(m)}">${L.toTime(m)}</button>`) : html`<span class="muted small">В этот день свободного времени нет</span>`}</div></div>
+      </div>
+      <button class="btn btn--accent btn--wide" style="margin-top:14px" type="button" data-sheet="m-save">Записать</button>
+      <p class="demo-note">Бот даст ссылку для клиента: по ней он получит напоминания</p>`);
   }
   ACTS.sseg = (d) => { haptic.tap(); view.sched = d.v; refresh(); };
   ACTS.sday = (d) => { haptic.tap(); view.schedDay = d.date; view.sched = 'day'; refresh(); };
@@ -1028,30 +1299,59 @@
   function ownerClients() {
     const idleDays = 45;
     const q = view.q.trim().toLowerCase();
-    const groups = { all: owner.clients, loyal: owner.clients.filter((c) => c.visits >= 5), idle: owner.clients.filter((c) => c.last >= idleDays) };
+    const black = store.get().black;
+    const groups = { all: owner.clients, loyal: owner.clients.filter((c) => c.visits >= 5), idle: owner.clients.filter((c) => c.last >= idleDays), bday: owner.clients.filter((c) => bdayIn(c) <= 14), black: owner.clients.filter((c) => black[c.id]) };
     const list = groups[view.clients].filter((c) => !q || c.name.toLowerCase().includes(q) || c.phone.replace(/\D/g, '').includes(q.replace(/\D/g, '') || '#'));
     const invited = store.get().invited;
     const ago = (n) => (n < 7 ? `${n} ${L.plural(n, 'день', 'дня', 'дней')} назад` : n < 60 ? `${Math.round(n / 7)} нед. назад` : `${Math.round(n / 30)} мес. назад`);
     return html`
-      <label class="search">${I.search}<input data-in="q" type="search" placeholder="Имя или телефон" value="${view.q}" autocomplete="off"></label>
+      ${has('broadcast') ? html`<button class="btn btn--plain btn--wide" style="margin-bottom:12px" type="button" data-act="broadcast">${I.msg}Написать всем клиентам · ${owner.clients.length}</button>` : ''}
+      <label class="search">${I.search}<input data-in="q" type="search" placeholder="Имя, телефон или №" value="${view.q}" autocomplete="off"></label>
       <div class="filters">
         <button type="button" class="${view.clients === 'all' ? 'is-on' : ''}" data-act="cseg" data-v="all">Все · ${groups.all.length}</button>
         <button type="button" class="${view.clients === 'loyal' ? 'is-on' : ''}" data-act="cseg" data-v="loyal">Постоянные · ${groups.loyal.length}</button>
         <button type="button" class="${view.clients === 'idle' ? 'is-on' : ''}" data-act="cseg" data-v="idle">Давно не были · ${groups.idle.length}</button>
+        ${has('birthday') ? html`<button type="button" class="${view.clients === 'bday' ? 'is-on' : ''}" data-act="cseg" data-v="bday">День рождения скоро · ${groups.bday.length}</button>` : ''}
+        ${has('blacklist') ? html`<button type="button" class="${view.clients === 'black' ? 'is-on' : ''}" data-act="cseg" data-v="black">Чёрный список · ${groups.black.length}</button>` : ''}
       </div>
-      ${view.clients === 'idle' ? html`<div class="card note" style="margin-bottom:12px">${I.sparkle}<div><b>Верните их одной кнопкой</b><span class="muted">Бот напишет: «Давно не виделись», и покажет свободные окна. Без рассылок вручную.</span></div></div>` : ''}
+      ${view.clients === 'bday' ? html`<div class="card note" style="margin-bottom:12px">${I.sparkle}<div><b>Поздравим сами</b><span class="muted">В день рождения бот пришлёт поздравление и подарок: скидку 15% на неделю.</span></div></div>` : ''}
+      ${view.clients === 'black' ? html`<div class="card note" style="margin-bottom:12px">${I.shield}<div><b>Кто не приходит</b><span class="muted">Записаться они смогут только с предоплатой, а вы увидите пометку в заявке.</span></div></div>` : ''}
+      ${view.clients === 'idle' && has('winback') ? html`<div class="card note" style="margin-bottom:12px">${I.sparkle}<div><b>Верните их одной кнопкой</b><span class="muted">Бот напишет: «Давно не виделись», и покажет свободные окна. Без рассылок вручную.</span></div></div>` : ''}
       ${list.length ? html`<div class="list" id="clients">${list.map((c) => html`
-        <div class="row">
+        <div class="row" data-act="client" data-id="${c.id}" role="button" tabindex="0">
           <span class="avatar">${L.initials(c.name)}</span>
-          <div class="row__main"><div class="row__title">${c.name}</div><div class="row__sub">${c.visits} ${L.plural(c.visits, 'визит', 'визита', 'визитов')} · ${L.money(Math.round(c.sum / 100) * 100)} · был ${ago(c.last)}</div></div>
-          ${c.last >= idleDays ? (invited[c.id] ? html`<span class="chip chip--ok">${I.check}Позвали</span>` : html`<button class="btn btn--soft btn--sm" type="button" data-act="invite" data-id="${c.id}">Позвать</button>`) : ''}
+          <div class="row__main"><div class="row__title">${c.name} <span class="small muted">№${c.id.slice(1)}</span>${black[c.id] ? html` <span class="chip chip--off">ч/с</span>` : ''}</div><div class="row__sub">${c.visits} ${L.plural(c.visits, 'визит', 'визита', 'визитов')} · ${L.money(Math.round(c.sum / 100) * 100)} · был ${ago(c.last)}</div></div>
+          ${c.last >= idleDays && has('winback') ? (invited[c.id] ? html`<span class="chip chip--ok">${I.check}Позвали</span>` : html`<button class="btn btn--soft btn--sm" type="button" data-act="invite" data-id="${c.id}">Позвать</button>`) : ''}
         </div>`)}</div>` : html`<div class="empty"><div class="empty__icon">${I.search}</div><h3 class="display h3">Никого не нашли</h3><p>Попробуйте имя или последние цифры телефона</p></div>`}`;
   }
   ACTS.cseg = (d) => { haptic.tap(); view.clients = d.v; refresh(); };
+  /** Через сколько дней день рождения клиента (примерно у каждого четвёртого скоро). */
+  const bdayIn = (c) => (Number(c.id.slice(1)) % 4 === 1 ? 2 + (Number(c.id.slice(1)) % 11) : 99);
+  ACTS.client = (d, el, e) => {
+    if (e && e.target.closest('[data-act="invite"]')) return;
+    const c = owner.clients.find((x) => x.id === d.id); if (!c) return;
+    haptic.tap();
+    const st = store.get();
+    openSheet(html`
+      <div class="master-head"><span class="avatar avatar--lg">${L.initials(c.name)}</span><div><h2 class="display h2">${c.name}</h2><div class="muted">№${c.id.slice(1)} · ${c.phone}</div></div></div>
+      <div class="tiles" style="margin-top:0"><div class="card tile"><b>${c.visits}</b><span>визитов</span></div><div class="card tile"><b>${L.money(Math.round(c.sum / 100) * 100)}</b><span>всего</span></div><div class="card tile"><b>${c.last}</b><span>${L.plural(c.last, 'день', 'дня', 'дней')} назад</span></div></div>
+      <div class="list" style="margin-top:12px">
+        <div class="row"><div class="row__main"><div class="row__title">Любит</div><div class="row__sub">${c.fav} · ${c.master}</div></div></div>
+        ${has('birthday') && bdayIn(c) <= 14 ? html`<div class="row"><div class="row__main"><div class="row__title">День рождения через ${bdayIn(c)} ${L.plural(bdayIn(c), 'день', 'дня', 'дней')}</div><div class="row__sub">Бот поздравит сам</div></div></div>` : ''}
+        ${has('notes') ? html`<label class="field"><span>Заметка, видите только вы</span><textarea data-sheet-in="note" data-id="${c.id}" rows="2" maxlength="300" placeholder="Например: аллергия на лак, любит тихо">${st.notes[c.id] || ''}</textarea></label>` : ''}
+      </div>
+      ${has('notes') ? html`<button class="btn btn--soft btn--wide" style="margin-top:12px" type="button" data-sheet="note-save" data-id="${c.id}">Сохранить заметку</button>` : ''}
+      ${has('blacklist') ? html`<button class="btn btn--line btn--wide" style="margin-top:8px" type="button" data-sheet="black" data-id="${c.id}">${st.black[c.id] ? 'Убрать из чёрного списка' : 'В чёрный список'}</button>` : ''}`);
+  };
+  ACTS.broadcast = () => openSheet(html`
+    <div class="page-title">${heading('Рассылка', 'всем', 'h2')}<p>Сообщение уйдёт ${owner.clients.length} клиентам в Telegram. Бот не пишет ночью.</p></div>
+    <div class="list"><label class="field"><span>Текст</span><textarea data-sheet-in="bc" rows="4" maxlength="500">Новинка: ${lower(venue.services[venue.services.length - 1].t)}. Запишитесь на этой неделе, и будет скидка 10%</textarea></label></div>
+    <button class="btn btn--accent btn--wide" style="margin-top:14px" type="button" data-sheet="bc-send">Отправить ${owner.clients.length} клиентам</button>`);
   ACTS.invite = (d) => { store.update((s) => { s.invited[d.id] = true; }); haptic.ok(); toast('Бот отправил приглашение со свободными окнами'); refresh(); };
   INPUTS.q = (el) => { view.q = el.value; const pos = el.selectionStart; refresh(); const n = current.querySelector('[data-in="q"]'); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch { /* type=search */ } } };
 
   function ownerMoney() {
+    if (!has('accounting')) return monthlyReport();
     const week = view.money === 'week';
     const rows = week ? owner.perDay.map((x) => ({ label: L.WD[L.parse(x.date).getDay()], sum: x.sum, visits: x.visits, hi: x.date === L.today() })) : owner.perWeek.map((x, i) => ({ label: `${i + 1} нед`, sum: x.sum, visits: x.visits, hi: i === 3 }));
     const total = rows.reduce((a, x) => a + x.sum, 0);
@@ -1090,8 +1390,99 @@
         <div class="section__head"><h2 class="display h3">По <em>${who}ам</em></h2></div>
         <div class="card share">${owner.byMaster.map((x) => html`<div class="share__row"><span>${x.name}</span><b>${L.money(Math.round(total * x.share / 100) * 100)}</b><div class="share__bar"><i style="--p:${Math.round(x.share * 100)}%"></i></div></div>`)}</div>
       </div>` : ''}
-      <p class="demo-note">Отчёт можно выгрузить в Excel одной кнопкой</p>`;
+      ${has('sources') ? html`<div class="section rise" style="margin-top:18px"><div class="section__head"><h2 class="display h3">Откуда <em>клиенты</em></h2></div>
+        <div class="card share">${X.SOURCES.slice(0, 5).map((src, i) => { const sh = [0.34, 0.22, 0.18, 0.15, 0.11][i]; return html`<div class="share__row"><span>${src}</span><b>${Math.round(visits * sh)} ${L.plural(Math.round(visits * sh), 'визит', 'визита', 'визитов')}</b><div class="share__bar"><i style="--p:${Math.round(sh * 100 / 0.34)}%"></i></div></div>`; })}</div></div>` : ''}
+      ${has('team') && venue.masters.length ? html`<div class="section rise" style="margin-top:18px"><div class="section__head"><h2 class="display h3">Зарплата <em>${who}ам</em></h2><span class="tag tag--card">40%</span></div>
+        <div class="card share">${owner.byMaster.map((x) => html`<div class="share__row"><span>${x.name} · ★ ${fmtRating((master(venue.masters.find((m) => m.name === x.name).id) || {}).rating || 5)}</span><b>${L.money(Math.round(total * x.share * 0.4 / 100) * 100)}</b><div class="share__bar"><i style="--p:${Math.round(x.share * 100)}%"></i></div></div>`)}</div>
+        <p class="demo-note">Чаевые приходят мастерам напрямую по их ссылкам</p></div>` : ''}
+      ${has('expenses') ? expensesBlock(total) : ''}
+      <button class="btn btn--plain btn--wide" style="margin-top:18px" type="button" data-act="excel">${I.cal}Выгрузить в Excel</button>
+      ${has('monthly') ? html`<button class="section__link" style="display:block;margin:14px auto 0" type="button" data-act="monthly">Как выглядит отчёт за месяц</button>` : ''}`;
   }
+  function expensesBlock(total) {
+    const st = store.get();
+    const exp = st.expenses || [['Аренда', 45000], ['Материалы', Math.round(total * 0.08 / 100) * 100], ['Реклама', 8000]];
+    const month = owner.perWeek.reduce((a, x) => a + x.sum, 0);
+    const spent = exp.reduce((a, [, v]) => a + v, 0);
+    const salary = has('team') ? Math.round(month * 0.4 / 100) * 100 : 0;
+    return html`<div class="section rise" style="margin-top:18px"><div class="section__head"><h2 class="display h3">Расходы <em>и прибыль</em></h2><span class="tag tag--card">за месяц</span></div>
+      <div class="list">${exp.map(([t, v]) => html`<div class="row"><div class="row__main"><div class="row__title">${t}</div></div><span class="row__price">−${L.money(v)}</span></div>`)}${salary ? html`<div class="row"><div class="row__main"><div class="row__title">Зарплата мастеров</div></div><span class="row__price">−${L.money(salary)}</span></div>` : ''}</div>
+      <div class="tiles" style="grid-template-columns:1fr 1fr"><div class="card tile"><b>${L.money(month)}</b><span>выручка</span></div><div class="card tile"><b>${L.money(month - spent - salary)}</b><span>чистая прибыль</span></div></div></div>`;
+  }
+  function monthlyReport() {
+    const month = owner.perWeek.reduce((a, x) => a + x.sum, 0); const visits = owner.perWeek.reduce((a, x) => a + x.visits, 0);
+    return html`<div class="section__head"><h2 class="display h3">Отчёт <em>за месяц</em></h2></div>
+      <div class="bubble-wrap"><div class="bubble"><div class="bubble__from">Бот записи</div><b>Итоги месяца</b><br>Заявок: ${Math.round(visits * 1.15)}, из них ночью ${Math.round(visits * 0.18)}<br>Визитов: ${visits}<br>Выручка: ${L.money(month)}<br>Неявок: ${owner.noshowNow}%<div class="bubble__time">1-е число, 10:00</div></div></div>
+      <p class="demo-note">В пакете «Администратор 24/7» здесь подробный учёт: выручка по дням, мастерам, услугам и Excel</p>`;
+  }
+  ACTS.monthly = () => openSheet(html`<div class="page-title">${heading('Отчёт', 'за месяц', 'h2')}<p>Приходит владельцу 1-го числа.</p></div>${monthlyReport()}<button class="btn btn--plain btn--wide" style="margin-top:18px" type="button" data-sheet="close">Понятно</button>`);
+  ACTS.excel = () => {
+    const rows = [['Дата', 'Время', 'Клиент', 'Услуга', 'Мастер', 'Сумма']];
+    for (let i = 0; i < 7; i++) { const date = L.addDays(L.today(), i - 6); owner.daySchedule(date).forEach((x) => rows.push([date, x.time, x.client, x.service, x.master, x.price])); }
+    const csv = '\ufeff' + rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(';')).join('\r\n');
+    haptic.ok();
+    if (inTelegram) { toast('В настоящем боте файл Excel придёт в этот чат'); return; }
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const a = document.createElement('a'); a.href = url; a.download = 'zapisi.csv'; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  };
+
+  /* ================= Настройки: цены, часы, закрытые дни ================= */
+
+  function ownerSettings() {
+    const st = store.get();
+    const days = Array.from({ length: 14 }, (_, i) => L.addDays(L.today(), i));
+    return html`
+      ${has('settings') ? html`<section class="rise"><div class="section__head"><h2 class="display h3">Цены</h2><span class="small muted">сразу видны клиентам</span></div>
+        <div class="list">${venue.services.map((x) => html`<label class="row"><div class="row__main"><div class="row__title">${x.t}</div><div class="row__sub">${L.duration(x.d)}</div></div><input class="price-in" data-in="price" data-id="${x.id}" type="number" inputmode="numeric" min="0" max="10000000" step="100" value="${x.p}"><span class="muted">₽</span></label>`)}</div></section>
+      <section class="section rise"><div class="section__head"><h2 class="display h3">Часы <em>работы</em></h2></div>
+        <div class="list"><div class="row"><div class="row__main"><div class="row__title">Ежедневно 10:00–21:00</div><div class="row__sub">Перерыв и часы мастеров меняются кнопками в боте</div></div></div></div></section>` : ''}
+      ${has('closeday') ? html`<section class="section rise"><div class="section__head"><h2 class="display h3">Закрыть <em>дни</em></h2><span class="small muted">отпуск, санитарный день</span></div>
+        <div class="days">${days.map((date) => { const d = L.parse(date); const on = st.closed.includes(date); return html`
+          <button class="day ${on ? 'is-on' : ''}" type="button" data-act="close-day" data-date="${date}" aria-pressed="${on}"><div class="day__wd">${L.WD[d.getDay()]}</div><div class="day__n">${d.getDate()}</div><div class="day__free">${on ? 'закрыт' : ''}</div></button>`; })}</div>
+        <p class="demo-note">Закройте день и откройте запись как клиент: в этот день окон не будет</p></section>` : ''}`;
+  }
+  INPUTS.price = (el) => {
+    const v = Math.round(Math.max(0, Math.min(10000000, Number(el.value) || 0)));
+    store.update((s) => { s.prices[el.dataset.id] = v; });
+    applyPrices();
+  };
+  ACTS['close-day'] = (d) => {
+    store.update((s) => { if (s.closed.includes(d.date)) s.closed = s.closed.filter((x) => x !== d.date); else s.closed.push(d.date); });
+    haptic.tap(); toast(store.get().closed.includes(d.date) ? `${L.dayTitle(d.date)}: запись закрыта` : `${L.dayTitle(d.date)}: снова открыт`); refresh();
+  };
+
+  /* ================= Опции: пакеты и опции бота, переключатели для демо ================= */
+
+  function ownerOptions() {
+    const cur = planKey(); const d = store.get().demo;
+    const optState = (k) => (included(k) ? (d.off && d.off[k] ? 'off' : 'in') : (d.on && d.on[k] ? 'on' : 'off'));
+    return html`
+      <p class="demo-note" style="margin:0 4px 14px;text-align:left">Это демо: переключайте пакет и опции и смотрите, как меняется приложение у клиента и у вас. Настоящий набор зависит от пакета заведения.</p>
+      <div class="plans">${Object.entries(X.PLANS).map(([k, p]) => html`
+        <button class="plan ${k === cur ? 'is-on' : ''}" type="button" data-act="plan" data-v="${k}">
+          <span class="plan__title">${p.title}</span><span class="plan__price">${L.money(p.price)}</span><span class="plan__about">${p.about}</span>
+          ${k === cur ? html`<span class="chip chip--ok">${I.check}Сейчас</span>` : ''}
+        </button>`)}</div>
+      <section class="section"><div class="section__head"><h2 class="display h3">В пакете</h2></div>
+        <div class="list">${X.PLANS[cur].features.filter((k) => X.FEATURES[k]).map((k) => html`<div class="row is-on"><span class="tick">${I.checkBold}</span><div class="row__main"><div class="row__title">${X.FEATURES[k]}</div></div></div>`)}</div></section>
+      <section class="section"><div class="section__head"><h2 class="display h3">Опции</h2></div>
+        <div class="list">${Object.entries(X.OPTIONS).map(([k, o]) => { const s2 = optState(k); return html`
+          <label class="row opt"><div class="row__main"><div class="row__title">${o.title}</div><div class="row__sub">${o.about}</div><div class="row__sub">${s2 === 'in' ? 'входит в пакет' : cur === 'admin' && X.HEAVY.includes(k) ? `${L.money(Math.round(o.price * 0.7))} со скидкой 30%` : L.money(o.price)}</div></div>
+            <input class="switch" type="checkbox" data-in="opt" data-id="${k}" ${s2 === 'off' ? '' : 'checked'}></label>`; })}</div>
+        <p class="demo-note">Позже: мини-приложение 12 000 ₽ (вы в нём), несколько филиалов 7 000 ₽, учёт материалов 6 000 ₽</p></section>
+      <button class="btn btn--line btn--wide" style="margin-top:12px" type="button" data-act="plan-reset">Вернуть как у заведения</button>`;
+  }
+  ACTS.plan = (dd) => { store.update((s) => { s.demo.plan = dd.v; s.demo.on = {}; s.demo.off = {}; }); haptic.ok(); toast(`Пакет «${X.PLANS[dd.v].title}»: посмотрите вкладки клиента`); refresh(); };
+  ACTS['plan-reset'] = () => { store.update((s) => { s.demo = {}; }); haptic.tap(); refresh(); };
+  INPUTS.opt = (el) => {
+    const k = el.dataset.id;
+    store.update((s) => {
+      s.demo.on = s.demo.on || {}; s.demo.off = s.demo.off || {};
+      if (included(k)) { if (el.checked) delete s.demo.off[k]; else s.demo.off[k] = true; } else if (el.checked) s.demo.on[k] = true; else delete s.demo.on[k];
+    });
+    haptic.tap(); refresh();
+  };
   ACTS.mseg = (d) => { haptic.tap(); view.money = d.v; refresh(); };
 
   /* ---------- Запуск ---------- */

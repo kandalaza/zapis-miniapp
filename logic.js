@@ -233,6 +233,10 @@
         const m = venue.masters.find((x) => x.id === b.masterId) || venue.masters[0];
         out.push({ time: b.time, end: toTime(toMin(b.time) + b.dur), dur: b.dur, master: m.name, masterId: m.id, service: b.titles.join(', '), price: b.total, client: `${b.name || 'Вы'} (это вы)`, status: b.status, own: true });
       }
+      for (const x of store.get().manual.filter((x) => x.date === date)) {
+        const m = venue.masters.find((mm) => mm.id === x.masterId) || venue.masters[0];
+        out.push({ time: x.time, end: toTime(toMin(x.time) + x.dur), dur: x.dur, master: m.name, masterId: m.id, service: x.title, price: x.price, client: `${x.name} (записали вручную)`, status: 'confirmed', own: true });
+      }
       return out.sort((a, b) => toMin(a.time) - toMin(b.time));
     }
     const capacity = venue.masters.length * (venue.close - venue.open);

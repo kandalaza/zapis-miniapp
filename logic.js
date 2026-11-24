@@ -124,7 +124,7 @@
   function makeStore(venue) {
     const key = `zapis-demo:${D.hash(venue.name)}`;
     let state = null;
-    const blank = () => ({ v: 1, bookings: [], decided: {}, invited: {}, seeded: false, demo: {}, prices: {}, closed: [], notes: {}, black: {}, waitlist: [], manual: [], expenses: null, features: {}, fset: {} });
+    const blank = () => ({ v: 1, bookings: [], decided: {}, invited: {}, seeded: false, demo: {}, prices: {}, closed: [], notes: {}, black: {}, waitlist: [], manual: [], expenses: null, features: {}, fset: {}, look: '' });
     function load() {
       if (state) return state;
       try { state = JSON.parse(localStorage.getItem(key) || 'null'); } catch { state = null; }

@@ -47,6 +47,7 @@
     sparkle: svg('<path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1-5.1-1.9 5.1-1.9z"/><path d="M18.5 16l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/>'),
     x: svg('<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>'),
     shield: svg('<path d="M12 3.5l7 2.8v5.2c0 4.4-3 7.7-7 9-4-1.3-7-4.6-7-9V6.3z"/><path d="M9 12l2.2 2.2L15.5 10"/>'),
+    heart: svg('<path d="M12 19.5s-7.5-4.4-7.5-10a4.2 4.2 0 0 1 7.5-2.6 4.2 4.2 0 0 1 7.5 2.6c0 5.6-7.5 10-7.5 10z"/>'),
   };
 
   /* ---------- Заведение, стиль, хранилище ---------- */
@@ -64,6 +65,20 @@
   const who = venue.base.who;
   const firstPaid = venue.services.find((s) => s.p > 0) || venue.services[0];
   const minDur = Math.min(...venue.services.map((s) => s.d), 60);
+
+  /* ---------- Вид главного экрана с фото (layouts.js). Без фото сферы остаётся прежний экран. ---------- */
+  const PH = Object.hasOwn(window.Photos || {}, venue.sphere) ? window.Photos[venue.sphere] : null;
+  const LX = window.Layouts;
+  const urlLook = new URLSearchParams(location.search).get('look');
+  let kind = '';
+  function pickKind() { kind = PH ? LX.pick(venue.sphere, venue.style, store.get().look || (['a', 'b'].includes(urlLook) ? urlLook : '')) : ''; }
+  pickKind();
+  const masterIndex = (id) => Math.max(0, venue.masters.findIndex((m) => m.id === id));
+  const masterImg = (id) => (PH ? PH.masters[masterIndex(id) % PH.masters.length] : '');
+  /** Аватар мастера: фото, если оно есть у сферы, иначе инициалы. */
+  const avatar = (m, cls = '') => (m && PH
+    ? html`<span class="avatar avatar--ph ${cls}"><img src="${masterImg(m.id)}" alt="" loading="lazy" decoding="async"></span>`
+    : html`<span class="avatar ${cls}">${m ? L.initials(m.name) : raw(I.sparkle.s)}</span>`);
 
   /* ---------- Пакет и опции: как в боте (src/plans.js). Бот передаёт пакет и опции заведения,
    * владелец в демо может переключать их на экране «Опции» (хранится только на этом телефоне). ---------- */
@@ -111,7 +126,8 @@
 
   let colors = {};
   function applyTheme() {
-    const t = window.TG.theme(params.theme === 'dark' || params.theme === 'light' ? params.theme : '');
+    const forced = kind && LX.DARK.has(kind) ? 'dark' : '';
+    const t = window.TG.theme(params.theme === 'dark' || params.theme === 'light' ? params.theme : forced);
     const c = t.colors;
     const pick = (k, f) => (isHex(c[k]) ? c[k] : f);
     const bg = pick('secondary_bg_color', t.dark ? '#000000' : '#f2f2f7');
@@ -160,12 +176,16 @@
     const cls = document.documentElement.classList;
     cls.toggle('dark', t.dark); cls.toggle('in-tg', inTelegram); cls.toggle('no-italic', !look.italic);
     cls.toggle('cover-dark', lum(cover) < 0.3);
+    Object.keys(LX.TITLES).forEach((k) => cls.toggle(`lay-${k}`, k === kind));
+    cls.toggle('lay', Boolean(kind));
     chrome();
   }
   function chrome() {
     const top = stack.length ? stack[stack.length - 1] : null;
     const onCover = !top || ['home', 'owner'].includes(top.name);
-    window.TG.setChrome(onCover ? colors.cover : colors.bg, colors.bg);
+    const homeTop = kind === 'cover' || kind === 'gallery' ? '#0b0b0b' : colors.bg;
+    const head = top && top.name === 'home' && kind ? homeTop : onCover ? colors.cover : colors.bg;
+    window.TG.setChrome(head, colors.bg);
   }
 
   /* ---------- Узоры обложек: рисуются кодом, у каждой сферы свой ---------- */
@@ -400,6 +420,7 @@
   const SCREENS = {};
 
   SCREENS.home = () => {
+    if (kind) return homeLayout();
     const next = upcoming()[0];
     const near = slots.nearest(null, minDur, 5);
     const first = near[0];
@@ -477,6 +498,15 @@
             </button>`)}</div>
         </section>` : ''}
 
+        ${lowerSections(false)}`,
+    };
+  };
+
+
+  /** Нижняя часть главной: услуги, отзывы, вопросы, адрес. С фото-видом мастера и работы уже показаны выше. */
+  function lowerSections(photoHome) {
+    const reviews = venue.base.reviews;
+    return html`
         <section class="section rise" style="--i:3">
           <div class="section__head"><h2 class="display h3">Услуги <em>и цены</em></h2></div>
           <div class="list">${venue.services.map((s) => html`
@@ -486,7 +516,7 @@
             </button>`)}</div>
         </section>
 
-        <section class="section rise" style="--i:4">
+        ${photoHome ? '' : html`<section class="section rise" style="--i:4">
           <div class="section__head"><h2 class="display h3">${venue.masters.length > 1 ? 'Наши' : 'Ваш'} <em>${venue.masters.length > 1 ? `${who}ы` : who}</em></h2></div>
           <div class="scroller">${venue.masters.map((m) => html`
             <button class="master" type="button" data-act="${has('portfolio') ? 'master-card' : 'book'}" data-master="${m.id}" data-id="${m.id}">
@@ -495,9 +525,9 @@
               <span class="master__role">${m.role}</span>
               <span class="master__rate">${I.star}${fmtRating(m.rating)}</span>
             </button>`)}</div>
-        </section>
+        </section>`}
 
-        ${has('portfolio') ? worksSection() : ''}
+        ${has('portfolio') && !photoHome ? worksSection() : ''}
         ${has('gift') ? html`
         <section class="section rise" style="--i:4">
           <button class="card gift" type="button" data-act="gift">
@@ -530,12 +560,31 @@
           </div>
         </section>
 
-        ${promo()}`,
+        ${promo()}`;
+  }
+
+  /* Главная с фото: верх из layouts.js, низ общий. */
+  let lx = null;
+  function homeLayout() {
+    lx = lx || LX.create({ html, raw, I, venue, L, has, F, slots, minDur, who, Who, fmtRating, statusChip, whenText, mapHref, isNewClient, upcoming, photos: PH });
+    return {
+      html: html`<div class="lx lx--${kind}">${lx.home(kind)}</div>${lowerSections(true)}`,
+      mount(el) {
+        const rail = el.querySelector('[data-rail]');
+        const dots = el.querySelectorAll('.lx-dots i');
+        if (rail && dots.length) rail.addEventListener('scroll', () => { const i = Math.round(rail.scrollLeft / Math.max(1, rail.firstElementChild.offsetWidth + 12)); dots.forEach((d, k) => d.classList.toggle('is-on', k === i)); }, { passive: true });
+      },
     };
-  };
+  }
 
   /* Работы мастеров (portfolio). Фото нет: карточки в стиле заведения с подписью, в боте здесь фото владельца. */
   function workCard(title, m, i) {
+    if (PH) return html`
+      <button class="work work--ph" type="button" data-act="lx-work" data-i="${i}">
+        <img src="${PH.works[i % PH.works.length].src}" alt="${title}" loading="lazy" decoding="async">
+        <span class="work__tag">${m.name}</span>
+        <span class="work__title">${title}</span>
+      </button>`;
     return html`
       <button class="work" type="button" data-act="work" data-i="${i}" style="--tint:${[14, 32, 22, 40, 18, 28][i % 6]}%">
         ${art(look.pattern, 11 + i)}
@@ -543,7 +592,7 @@
         <span class="work__title">${title}</span>
       </button>`;
   }
-  const worksList = () => X.works(venue.sphere).map((t, i) => ({ t, m: venue.masters[i % venue.masters.length], i }));
+  const worksList = () => (PH ? PH.works.map((w) => w.t) : X.works(venue.sphere)).map((t, i) => ({ t, m: venue.masters[i % venue.masters.length], i }));
   function worksSection() {
     return html`
       <section class="section rise" style="--i:4">
@@ -551,13 +600,36 @@
         <div class="scroller">${worksList().map((w) => workCard(w.t, w.m, w.i))}</div>
       </section>`;
   }
+  /* Работа крупно: «Хочу так же» начинает запись с подписью работы в пожеланиях. */
+  ACTS['lx-work'] = (d) => {
+    const w = worksList()[Number(d.i)];
+    if (!w || !PH) return;
+    haptic.tap();
+    const src = PH.works[w.i % PH.works.length].src;
+    openSheet(html`
+      <img class="work-big" src="${src}" alt="${w.t}">
+      <div class="master-head" style="margin-top:14px">${avatar(w.m)}<div><h2 class="display h2">${w.t}</h2><div class="muted">${w.m.name} · ${w.m.role}</div></div></div>
+      <p class="small muted" style="margin:0 4px 14px">Фото для примера. В вашем приложении здесь ваши работы, их можно добавить прямо из бота.</p>
+      <button class="btn btn--accent btn--wide" type="button" data-sheet="want" data-i="${w.i}">Хочу так же<span class="btn__go">${I.arrow}</span></button>`);
+  };
+  ACTS['lx-like'] = (d, el, e) => { e.stopPropagation(); haptic.tap(); el.classList.toggle('is-on'); toast(el.classList.contains('is-on') ? 'Сохранили в избранное' : 'Убрали из избранного'); };
+  const svcLike = (re) => venue.services.find((s) => re.test(s.t) && s.p > 0);
+  ACTS['lx-flash'] = (d) => { haptic.tap(); lx.flashState.i = Number(d.i) || 0; refresh(); };
+  ACTS['lx-size'] = (d) => { haptic.tap(); lx.flashState.s = Number(d.i) || 0; refresh(); };
+  ACTS['lx-flash-book'] = () => {
+    const it = PH.flash[lx.flashState.i];
+    const svc = (lx.flashState.s === 0 ? svcLike(/мини/i) : svcLike(/до 1\d|тату/i)) || firstPaid;
+    ACTS.book({ svc: svc.id });
+    draft.comment = `Эскиз «${it.t}», ${lx.SIZES[lx.flashState.s][0]}`;
+  };
   ACTS.work = (d) => { const w = worksList()[Number(d.i)]; if (w) { haptic.tap(); masterSheet(w.m.id); } };
   ACTS['master-card'] = (d) => { haptic.tap(); masterSheet(d.id); };
   function masterSheet(id) {
     const m = master(id);
     const works = worksList().filter((w) => w.m.id === id);
     openSheet(html`
-      <div class="master-head"><span class="avatar avatar--lg">${L.initials(m.name)}</span><div><h2 class="display h2">${m.name}</h2><div class="muted">${m.role} · ★ ${fmtRating(m.rating)} · ${m.since} ${L.plural(m.since, 'год', 'года', 'лет')} опыта</div></div></div>
+      ${PH ? html`<img class="master-cover" src="${masterImg(m.id)}" alt="${m.name}">` : ''}
+      <div class="master-head">${PH ? '' : html`<span class="avatar avatar--lg">${L.initials(m.name)}</span>`}<div><h2 class="display h2">${m.name}</h2><div class="muted">${m.role} · ★ ${fmtRating(m.rating)} · ${m.since} ${L.plural(m.since, 'год', 'года', 'лет')} опыта</div></div></div>
       <div class="works-grid">${works.map((w) => workCard(w.t, w.m, w.i))}</div>
       <button class="btn btn--accent btn--wide" style="margin-top:14px" type="button" data-sheet="book-master" data-id="${m.id}">Записаться к ${m.name}<span class="btn__go">${I.arrow}</span></button>`);
   }
@@ -664,7 +736,7 @@
           </button>
           ${venue.masters.map((m) => html`
           <button class="row" type="button" data-act="pick-master" data-id="${m.id}">
-            <span class="avatar">${L.initials(m.name)}</span>
+            ${avatar(m)}
             <div class="row__main"><div class="row__title">${m.name} <span class="small muted">★ ${fmtRating(m.rating)}</span></div><div class="row__sub">${m.role} · ${nearText(near(m.id))}</div></div>${I.chev}
           </button>`)}
         </div>`,
@@ -687,7 +759,7 @@
         ${moving ? '' : stepBar(3)}
         <div class="page-title rise">${heading(moving ? 'Новое' : 'Когда', moving ? 'время' : 'удобно?')}</div>
         <div class="card picked rise">
-          <span class="avatar" style="width:40px;height:40px;font-size:13px">${m ? L.initials(m.name) : raw(I.sparkle.s)}</span>
+          ${avatar(m, 'avatar--sm')}
           <div class="picked__main"><div class="picked__title">${draft.services.map((id) => svcById(id).t).join(', ')}</div><div class="picked__sub">${m ? m.name : `Любой ${who}`} · ${L.duration(dur)} · ${totalText(draft.services)}</div></div>
           ${moving ? '' : html`<button type="button" data-act="back">Изменить</button>`}
         </div>
@@ -1099,6 +1171,11 @@
     if (!el) return;
     const act = el.dataset.sheet;
     if (act === 'close') closeSheet();
+    if (act === 'want') {
+      const w = worksList()[Number(el.dataset.i)];
+      closeSheet();
+      setTimeout(() => { ACTS.book({ master: w.m.id }); draft.comment = `Как на фото: «${w.t}»`; }, 300);
+    }
     if (act === 'book-master') { const id = el.dataset.id; closeSheet(); setTimeout(() => ACTS.book({ master: id }), 300); }
     if (act === 'm-svc' || act === 'm-time') {
       manualDraft.name = (sheet.querySelector('[data-sheet-in="m-name"]') || {}).value || '';
@@ -1476,11 +1553,26 @@
     store.update((s) => { s.fset[el.dataset.id] = v; });
   };
 
+  /* Вид главного экрана: два варианта для сферы, выбор хранится на этом телефоне. */
+  function lookBlock() {
+    if (!PH) return '';
+    const pair = LX.KINDS[venue.sphere] || LX.KINDS.default;
+    return html`<section class="rise"><div class="section__head"><h2 class="display h3">Вид <em>приложения</em></h2><span class="small muted">клиенты увидят сразу</span></div>
+      <div class="looks">${pair.map((k, i) => html`<button type="button" class="look ${kind === k ? 'is-on' : ''}" data-act="look" data-v="${i ? 'b' : 'a'}" aria-pressed="${kind === k}">
+        <img src="${i ? PH.hall : PH.hero}" alt="" loading="lazy"><b>${LX.TITLES[k]}</b><span>${LX.ABOUT[k]}</span></button>`)}</div></section>`;
+  }
+  ACTS.look = (d) => {
+    store.update((s) => { s.look = d.v; });
+    pickKind(); lx = null; haptic.ok(); applyTheme(); refresh();
+    toast(`Вид «${LX.TITLES[kind]}». Откройте «Главную», чтобы посмотреть`);
+  };
+
   function ownerSettings() {
     const st = store.get();
     const days = Array.from({ length: 14 }, (_, i) => L.addDays(L.today(), i));
     return html`
-      ${has('settings') ? html`<section class="rise"><div class="section__head"><h2 class="display h3">Цены</h2><span class="small muted">сразу видны клиентам</span></div>
+      ${lookBlock()}
+      ${has('settings') ? html`<section class="${PH ? 'section ' : ''}rise"><div class="section__head"><h2 class="display h3">Цены</h2><span class="small muted">сразу видны клиентам</span></div>
         <div class="list">${venue.services.map((x) => html`<label class="row"><div class="row__main"><div class="row__title">${x.t}</div><div class="row__sub">${L.duration(x.d)}</div></div><input class="price-in" data-in="price" data-id="${x.id}" type="number" inputmode="numeric" min="0" max="10000000" step="100" value="${x.p}"><span class="muted">₽</span></label>`)}</div></section>
       <section class="section rise"><div class="section__head"><h2 class="display h3">Часы <em>работы</em></h2></div>
         <div class="list"><div class="row"><div class="row__main"><div class="row__title">Ежедневно 10:00–21:00</div><div class="row__sub">Перерыв и часы мастеров меняются кнопками в боте</div></div></div></div></section>` : ''}

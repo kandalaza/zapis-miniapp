@@ -99,6 +99,8 @@
 /* ---------- Мастера ---------- */
 .lx--masters { padding-top: calc(var(--safe-top) + 18px); }
 .lx-m-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.lx-m-head > div, .lx-p-head > div { min-width: 0; }
+.lx-m-head .lx-pill, .lx-p-head .lx-pill, .lx-a-top .lx-pill { flex: none; }
 .lx-m-hi { margin: 0; font-size: 14px; color: var(--hint); }
 .lx-m-name { margin: 2px 0 0; font-family: "Cormorant Garamond", ui-serif, Georgia, serif; font-style: italic; font-weight: 600; font-size: 30px; line-height: 1.05; letter-spacing: -.01em; }
 .lx-m-rail { display: flex; gap: 12px; overflow-x: auto; margin: 18px -16px 0; padding: 4px 16px 6px; scroll-snap-type: x mandatory; scrollbar-width: none; }

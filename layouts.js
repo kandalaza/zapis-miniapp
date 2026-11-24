@@ -58,7 +58,7 @@
     const img = (src, alt = '', cls = '', eager = false) => html`<img class="${cls}" src="${src}" alt="${alt}" ${raw(eager ? 'fetchpriority="high"' : 'loading="lazy"')} decoding="async">`;
     const masterPhoto = (i) => P.masters[i % P.masters.length];
     const reviewsText = `${venue.reviewsCount} ${L.plural(venue.reviewsCount, 'отзыв', 'отзыва', 'отзывов')}`;
-    const ratingPill = (cls = '') => html`<span class="lx-pill ${cls}">${I.star}${fmtRating(venue.rating)} · ${reviewsText}${venue.ratingSample ? ' · пример' : ''}</span>`;
+    const ratingPill = (cls = '') => html`<span class="lx-pill ${cls}">${I.star}${fmtRating(venue.rating)} · ${reviewsText}</span>`;
     const minPrice = () => { const ps = venue.services.map((s) => s.p).filter((p) => p > 0); return ps.length ? Math.min(...ps) : 0; };
     const works = () => P.works.map((w, i) => ({ ...w, i, m: venue.masters[i % venue.masters.length] }));
     const short = venue.address.split(',').slice(-2).join(',').trim();
@@ -182,7 +182,7 @@
           const w = has('selfbook') ? slots.nearest(m.id, minDur, 1)[0] : null;
           return html`
           <article class="lx-m-card">
-            <button type="button" class="lx-m-card__ph" data-act="master-card" data-id="${m.id}">${img(masterPhoto(i), m.name)}<span class="lx-m-card__more">Работы</span></button>
+            <button type="button" class="lx-m-card__ph" data-act="master-card" data-id="${m.id}">${img(masterPhoto(i), m.name, '', i === 0)}<span class="lx-m-card__more">Работы</span></button>
             <div class="lx-m-card__body">
               <div class="lx-m-card__row"><h2>${m.name}</h2><span class="lx-m-card__rate">${I.star}${fmtRating(m.rating)}</span></div>
               <p class="lx-m-card__role">${m.role}</p>
@@ -255,7 +255,7 @@
           <h2 class="lx-p-h">${Who} дня</h2>
           <p class="lx-p-day__name">${m.name}</p>
           <div class="lx-p-day__row">
-            <button type="button" class="lx-p-day__ph" data-act="master-card" data-id="${m.id}">${img(masterPhoto(mi), m.name)}</button>
+            <button type="button" class="lx-p-day__ph" data-act="master-card" data-id="${m.id}">${img(masterPhoto(mi), m.name, '', true)}</button>
             <dl>
               <div><dt>Стиль</dt><dd>${m.role}</dd></div>
               <div><dt>Рейтинг</dt><dd>${fmtRating(m.rating)}</dd></div>

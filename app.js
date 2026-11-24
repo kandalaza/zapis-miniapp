@@ -394,8 +394,9 @@
     }
     const quoted = /[«"]([^»"]+)[»"]/.exec(venue.name);
     const label = new RegExp(`^(${venue.base.label.split(/\s+/)[0].slice(0, 5)}|студи|салон|барбер|тату|спа|центр|школ)`, 'i');
-    const words = (quoted ? quoted[1] : venue.name).replace(/[«»"']/g, '').split(/\s+/).filter((w) => w && !(!quoted && label.test(w)));
-    const mono = L.initials(words.join(' ') || venue.name) || '•';
+    const clean = (t) => t.replace(/\([^)]*\)/g, ' ').split(/\s+/).map((w) => w.replace(/[^\p{L}\p{N}-]/gu, '').replace(/^-+|-+$/g, '')).filter(Boolean);
+    const words = clean(quoted ? quoted[1] : venue.name).filter((w) => quoted || !label.test(w));
+    const mono = L.initials((words.length ? words : clean(venue.name)).join(' ')) || '•';
     return {
       html: html`
         <header class="hero">

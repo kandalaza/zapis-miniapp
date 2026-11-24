@@ -69,9 +69,10 @@
   /* ---------- Вид главного экрана с фото (layouts.js). Без фото сферы остаётся прежний экран. ---------- */
   const PH = Object.hasOwn(window.Photos || {}, venue.sphere) ? window.Photos[venue.sphere] : null;
   const LX = window.Layouts;
-  const urlLook = new URLSearchParams(location.search).get('look');
   let kind = '';
-  function pickKind() { kind = PH ? LX.pick(venue.sphere, venue.style, store.get().look || (['a', 'b'].includes(urlLook) ? urlLook : '')) : ''; }
+  /* Выбор владельца в «Настройках» важнее ссылки; classic это прежний вид без фото. */
+  const lookChoice = () => (['classic', 'a', 'b'].includes(store.get().look) ? store.get().look : params.look);
+  function pickKind() { kind = PH && lookChoice() !== 'classic' ? LX.pick(venue.sphere, venue.style, lookChoice()) : ''; }
   pickKind();
   const masterIndex = (id) => Math.max(0, venue.masters.findIndex((m) => m.id === id));
   const masterImg = (id) => (PH ? PH.masters[masterIndex(id) % PH.masters.length] : '');
@@ -1559,12 +1560,13 @@
     const pair = LX.KINDS[venue.sphere] || LX.KINDS.default;
     return html`<section class="rise"><div class="section__head"><h2 class="display h3">Вид <em>приложения</em></h2><span class="small muted">клиенты увидят сразу</span></div>
       <div class="looks">${pair.map((k, i) => html`<button type="button" class="look ${kind === k ? 'is-on' : ''}" data-act="look" data-v="${i ? 'b' : 'a'}" aria-pressed="${kind === k}">
-        <img src="${i ? PH.hall : PH.hero}" alt="" loading="lazy"><b>${LX.TITLES[k]}</b><span>${LX.ABOUT[k]}</span></button>`)}</div></section>`;
+        <img src="${i ? PH.hall : PH.hero}" alt="" loading="lazy"><b>${LX.TITLES[k]}</b><span>${LX.ABOUT[k]}</span></button>`)}
+        <button type="button" class="look look--wide ${kind ? '' : 'is-on'}" data-act="look" data-v="classic" aria-pressed="${!kind}"><span class="look__swatch">${art(look.pattern, 3)}</span><b>Прежний</b><span>Без фото: цвет и узор заведения, крупное ближайшее время</span></button></div></section>`;
   }
   ACTS.look = (d) => {
     store.update((s) => { s.look = d.v; });
     pickKind(); lx = null; haptic.ok(); applyTheme(); refresh();
-    toast(`Вид «${LX.TITLES[kind]}». Откройте «Главную», чтобы посмотреть`);
+    toast(`Вид «${kind ? LX.TITLES[kind] : 'Прежний'}». Откройте «Главную», чтобы посмотреть`);
   };
 
   function ownerSettings() {

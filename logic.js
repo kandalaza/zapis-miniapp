@@ -87,6 +87,7 @@
       masters: masters.length ? masters : null,
       theme: ['light', 'dark'].includes(q.get('theme')) ? q.get('theme') : '',
       plan: ['start', 'noshow', 'admin'].includes(data.pl) ? data.pl : (['start', 'noshow', 'admin'].includes(q.get('plan')) ? q.get('plan') : 'admin'),
+      look: ['classic', 'a', 'b'].includes(data.lk) ? data.lk : (['classic', 'a', 'b'].includes(q.get('look')) ? q.get('look') : ''),
       options: (Array.isArray(data.op) ? data.op : String(q.get('options') || '').split(',')).map((o) => str(o, 20)).filter((o) => o && /^[a-z]+$/.test(o)).slice(0, 12),
     };
   }

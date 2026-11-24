@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="format-detection" content="telephone=no">
+  <meta name="robots" content="noindex">
+  <title>Запись онлайн</title>
+  <link rel="preload" href="fonts/manrope-normal-500-800-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="fonts/fonts.css?v=7">
+  <link rel="stylesheet" href="app.css?v=7">
+  <!-- Официальный скрипт Telegram (telegram.org/js/telegram-web-app.js), лежит рядом: telegram.org бывает недоступен, и тогда страница ждёт его. -->
+  <script src="telegram-web-app.js?v=7"></script>
+</head>
+<body>
+  <noscript>Для записи включите JavaScript.</noscript>
+  <div class="app" id="app" aria-live="polite"></div>
+  <nav class="tabs" id="tabs" aria-label="Разделы"></nav>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="sheet" id="sheet" aria-hidden="true"></div>
+  <script src="spheres.js?v=7"></script>
+  <script src="logic.js?v=7"></script>
+  <script src="tg.js?v=7"></script>
+  <script src="app.js?v=7"></script>
+</body>
+</html>
